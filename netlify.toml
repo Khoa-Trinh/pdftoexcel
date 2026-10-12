@@ -1,0 +1,10 @@
+[build]
+  command = "pnpm build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "24"
+  PNPM_VERSION = "10.34.7"
+
+# Nitro's netlify preset generates .netlify/functions-internal/server and
+# server.mjs with catch-all routing. No additional Netlify Vite plugin is needed.
