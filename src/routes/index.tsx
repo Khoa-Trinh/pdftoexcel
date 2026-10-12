@@ -1,9 +1,11 @@
 import { useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { ArrowDownToLine, FileText, Files, FolderOpen, ShieldCheck, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { SpreadsheetPreview } from '@/components/spreadsheet-preview'
+import type { ExtractionResult } from '@/types/invoice'
+
+type FileOutcome = { result: ExtractionResult; error?: never } | { error: string; result?: never }
 
 export const Route = createFileRoute('/')({ component: Home })
 
@@ -15,8 +17,59 @@ function Home() {
   const picker = useRef<HTMLInputElement>(null)
   const [files, setFiles] = useState<File[]>([])
   const [notice, setNotice] = useState('')
+  const [outcomes, setOutcomes] = useState<Record<string, FileOutcome>>({})
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null)
+  const extracting = useRef(false)
+  const pending = files.filter((file) => !outcomes[fileKey(file)]?.result)
+  const results = files.flatMap((file) => {
+    const result = outcomes[fileKey(file)]?.result
+    return result ? [result] : []
+  })
+
+  function removeFile(file: File) {
+    if (extracting.current) return
+    const key = fileKey(file)
+    setFiles((current) => current.filter((entry) => fileKey(entry) !== key))
+    setOutcomes((current) => {
+      const next = { ...current }
+      delete next[key]
+      return next
+    })
+  }
+
+  async function extractFiles() {
+    if (extracting.current || pending.length === 0) return
+    extracting.current = true
+    setNotice('')
+    try {
+      // One request at a time keeps PDF parsing memory bounded on the server.
+      for (const [index, file] of pending.entries()) {
+        setProgress({ current: index + 1, total: pending.length })
+        let outcome: FileOutcome
+        try {
+          if (file.size > 4 * 1024 * 1024) throw new Error('Tệp PDF quá lớn (tối đa 4 MB).')
+          const form = new FormData()
+          form.append('file', file)
+          const response = await fetch('/api/extract', { method: 'POST', body: form })
+          if (!response.headers.get('content-type')?.includes('application/json')) {
+            throw new Error('Máy chủ không phản hồi. Vui lòng thử lại.')
+          }
+          const data = await response.json()
+          if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Không thể đọc PDF. Vui lòng thử lại.')
+          outcome = { result: data as ExtractionResult }
+        } catch (error) {
+          outcome = { error: error instanceof TypeError ? 'Không thể kết nối máy chủ. Vui lòng thử lại.' : error instanceof Error ? error.message : 'Không thể đọc PDF. Vui lòng thử lại.' }
+        }
+        setOutcomes((current) => ({ ...current, [fileKey(file)]: outcome }))
+      }
+    } finally {
+      extracting.current = false
+      setProgress(null)
+    }
+  }
 
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
+    if (extracting.current) return
     const selected = Array.from(event.target.files ?? [])
     const pdfs = selected.filter((file) => /\.pdf$/i.test(file.name))
     setFiles((current) => {
@@ -30,83 +83,61 @@ function Home() {
   }
 
   return (
-    <div className="min-h-svh">
-      <header className="border-b bg-card">
-        <div className="mx-auto flex max-w-5xl items-center gap-3 px-5 py-5 sm:px-8">
-          <span className="flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground"><Files aria-hidden="true" className="size-6" /></span>
-          <span className="text-lg font-semibold tracking-tight">Sổ hóa đơn</span>
-          <span className="ml-auto rounded-full bg-secondary px-3 py-1 text-sm text-secondary-foreground">Bản khởi tạo</span>
+    <main className="mx-auto max-w-7xl space-y-10 px-5 py-10 sm:px-8 sm:py-14">
+      <h1 className="text-3xl font-semibold sm:text-4xl">Trích xuất hóa đơn PDF</h1>
+
+      <section aria-label="Chọn hóa đơn" className="space-y-4">
+        <input
+          ref={picker}
+          id="invoice-files"
+          type="file"
+          accept=".pdf,application/pdf"
+          multiple
+          disabled={progress !== null}
+          className="sr-only"
+          aria-label="Chọn các tệp hóa đơn PDF"
+          onChange={selectFiles}
+          tabIndex={-1}
+        />
+        <div className="flex flex-wrap gap-4">
+          <Button type="button" variant="outline" size="lg" className="h-12 px-6 text-base" disabled={progress !== null} onClick={() => picker.current?.click()}>
+            Chọn tệp PDF
+          </Button>
+          <Button type="button" disabled={progress !== null || pending.length === 0} size="lg" className="h-12 px-6 text-base" onClick={extractFiles}>
+            {progress ? `Đang trích xuất ${progress.current}/${progress.total}…` : pending.length > 0 && pending.every((file) => outcomes[fileKey(file)]?.error) ? 'Thử lại tệp lỗi' : 'Trích xuất hóa đơn'}
+          </Button>
         </div>
-      </header>
 
-      <main className="mx-auto max-w-5xl px-5 py-10 sm:px-8 sm:py-14">
-        <div className="mb-9 max-w-2xl">
-          <p className="mb-3 text-sm font-semibold tracking-widest text-primary uppercase">Từ hóa đơn đến bảng tính</p>
-          <h1 className="text-3xl leading-tight font-semibold tracking-tight sm:text-4xl">Trích xuất hóa đơn PDF</h1>
-          <p className="mt-4 text-lg leading-relaxed text-muted-foreground">Chọn hóa đơn, xem lại thông tin và tải về Excel.<br className="hidden sm:block" /> Mọi thứ trong một vài bước đơn giản.</p>
-        </div>
+        <p role="status" aria-live="polite" className="text-base text-muted-foreground">
+          {progress ? `Đang trích xuất ${progress.current}/${progress.total} tệp PDF` : files.length > 0 ? `Đã chọn ${files.length} tệp PDF` : 'Chưa có tệp nào được chọn.'}
+        </p>
+        {notice && <p role="alert" className="text-base text-destructive">{notice}</p>}
+        {files.length > 0 && (
+          <ul aria-label="Hóa đơn đã chọn" className="divide-y">
+            {files.map((file) => (
+              <li key={fileKey(file)} className="flex items-center gap-4 py-3 text-base">
+                <div className="min-w-0 flex-1 break-all">
+                  <span>{file.name}</span>
+                  {outcomes[fileKey(file)]?.error && <p role="alert" className="text-base text-destructive">{outcomes[fileKey(file)]?.error}</p>}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="lg"
+                  className="px-4 text-base"
+                  aria-label={`Xóa ${file.name}`}
+                  disabled={progress !== null}
+                  onClick={() => removeFile(file)}
+                >
+                  Xóa
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
-        <ol aria-label="Các bước xử lý hóa đơn" className="mb-8 grid gap-3 sm:grid-cols-3">
-          {['Chọn hóa đơn PDF', 'Xem lại & chỉnh sửa', 'Tải bảng Excel'].map((step, index) => (
-            <li key={step} aria-current={index === 0 ? 'step' : undefined} className={`flex items-center gap-3 rounded-xl border px-4 py-4 ${index === 0 ? 'border-primary/30 bg-primary/5' : 'bg-card text-muted-foreground'}`}>
-              <span className={`flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${index === 0 ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>{index + 1}</span>
-              <span className="font-medium">{step}</span>
-            </li>
-          ))}
-        </ol>
-
-        <Card className="border-border shadow-sm">
-          <CardHeader className="px-6 pt-6 sm:px-8">
-            <CardTitle className="text-xl">1. Chọn hóa đơn</CardTitle>
-            <CardDescription className="text-base">Bạn có thể chọn nhiều tệp PDF cùng lúc.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6 px-6 pb-7 sm:px-8">
-            <div className="flex flex-col items-center rounded-xl border-2 border-dashed border-primary/25 bg-primary/[0.025] px-4 py-9 text-center">
-              <FolderOpen aria-hidden="true" className="mb-4 size-10 text-primary" strokeWidth={1.5} />
-              <p className="mb-5 text-base text-muted-foreground">Chọn hóa đơn PDF từ máy của bạn</p>
-              <input ref={picker} id="invoice-files" type="file" accept=".pdf,application/pdf" multiple className="sr-only" aria-label="Chọn các tệp hóa đơn PDF" onChange={selectFiles} tabIndex={-1} />
-              <Button type="button" size="lg" className="h-12 px-7 text-base" onClick={() => picker.current?.click()}><Files aria-hidden="true" />Chọn tệp PDF</Button>
-              <p className="mt-4 text-sm text-muted-foreground">Có thể thêm tệp bằng cách bấm lại nút này.</p>
-            </div>
-
-            <p role="status" aria-live="polite" className="text-base font-medium">{files.length > 0 ? `Đã chọn ${files.length} tệp PDF` : 'Chưa có tệp nào được chọn.'}</p>
-            {notice && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-amber-900">{notice}</p>}
-            {files.length > 0 && (
-              <ul aria-label="Hóa đơn đã chọn" className="divide-y rounded-xl border bg-card">
-                {files.map((file) => (
-                  <li key={fileKey(file)} className="flex items-center gap-3 px-4 py-3">
-                    <FileText aria-hidden="true" className="size-6 shrink-0 text-primary" />
-                    <span className="min-w-0 flex-1 break-all text-base">{file.name}</span>
-                    <Button type="button" variant="ghost" className="min-h-11 shrink-0 px-3 text-base" aria-label={`Xóa ${file.name}`} onClick={() => setFiles((current) => current.filter((entry) => fileKey(entry) !== fileKey(file)))}><Trash2 aria-hidden="true" className="size-4" /><span className="hidden sm:inline">Xóa</span></Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="flex items-start gap-2 text-sm leading-relaxed text-muted-foreground"><ShieldCheck aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-primary" /><p>Tệp hiện chỉ được chọn trên máy của bạn, chưa được gửi lên máy chủ.</p></div>
-            <div className="border-t pt-5">
-              <Button disabled size="lg" className="min-h-12 w-full whitespace-normal px-5 py-3 text-base sm:w-auto">Trích xuất hóa đơn — Sắp có</Button>
-              <p className="mt-3 text-sm text-muted-foreground">Tính năng trích xuất đang được phát triển.</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="mt-7 shadow-sm">
-          <CardHeader className="px-6 pt-6 sm:px-8">
-            <CardTitle className="text-xl">2. Kết quả hóa đơn</CardTitle>
-            <CardDescription className="text-base">Thông tin hóa đơn và danh sách hàng hóa sẽ hiển thị tại đây.</CardDescription>
-          </CardHeader>
-          <CardContent className="px-6 pb-7 sm:px-8">
-            <div className="rounded-xl bg-muted/60 px-5 py-10 text-center">
-              <FileText aria-hidden="true" className="mx-auto mb-4 size-9 text-muted-foreground" strokeWidth={1.5} />
-              <p className="text-lg font-medium">Chưa có kết quả</p>
-              <p className="mt-2 text-base text-muted-foreground">Sau khi trích xuất, bạn sẽ có thể xem lại và chỉnh sửa dữ liệu.</p>
-            </div>
-            <Button disabled variant="outline" size="lg" className="mt-5 min-h-12 w-full whitespace-normal px-5 py-3 text-base sm:w-auto"><ArrowDownToLine aria-hidden="true" />Tải Excel — Sắp có</Button>
-            <p className="mt-3 text-sm text-muted-foreground">Tính năng xuất Excel đang được phát triển.</p>
-          </CardContent>
-        </Card>
-        <footer className="mt-8 text-center text-sm leading-relaxed text-muted-foreground">Dễ chọn. Dễ kiểm tra. Dễ lưu lại.</footer>
-      </main>
-    </div>
+      <SpreadsheetPreview results={results} />
+    </main>
   )
 }

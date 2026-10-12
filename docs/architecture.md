@@ -30,15 +30,17 @@ Python file existed in the workspace to replace.
 bounds the received body, validates the PDF signature, limits files to 4 MiB and
 documents to 100 pages, returns safe errors and does not persist uploads. This is
 a synchronous parser endpoint, not a batch queue or storage service. The browser
-homepage is not yet connected to it; selected files there remain local.
+homepage uploads selected PDFs sequentially to bound concurrent parsing work,
+keeps per-file results/errors in memory, and retries only unsuccessful files.
+Picker/removal controls are locked during extraction. Removing a file clears its
+result. The UI imports only shared types; PDF libraries stay on the server.
 
 [Parser details and known differences](parser.md) describe the PDF engines,
 worker packaging, review rules and test coverage.
 
 ## Next implementation work
 
-- Validate real customer invoice layouts and connect the multi-file homepage to the adapter.
-- Add upload limits and clear per-file failure/retry feedback.
-- Build review/edit controls and show validation issues before export.
-- Choose an Excel library and generate a workbook with invoice and item sheets;
-  preserve identifiers as text and agree on dates, currency and VAT formatting.
+- Expand layout coverage beyond the three validated Rovin, 3K and Xảo Minh samples.
+- Build review/edit controls; validation issues are already shown alongside results.
+- Add review/edit controls. Spreadsheet export is implemented as one flattened
+  item sheet in XLSX or CSV; identifiers remain text and amounts remain numeric.

@@ -1,11 +1,9 @@
 # invoice-extractor
 
 Foundation for a Vietnamese PDF invoice extraction website. Includes a responsive
-Vietnamese homepage, multi-PDF selection/removal, empty results and clearly
-disabled extraction/Excel actions. A native TypeScript parser, server adapter,
-single-file extraction API and CLI are implemented. The homepage is not yet wired
-to that API, so files selected there remain in browser memory. No environment
-variables or Python runtime are needed.
+Vietnamese homepage with multi-PDF selection/removal and extraction of invoice
+fields and line items. A native TypeScript parser runs through a server API; the
+CLI is also available. No environment variables or Python runtime are needed.
 
 ## Local development
 
@@ -38,7 +36,8 @@ Health returns `{"ok":true,"service":"invoice-extractor"}`.
 
 - React + strict TypeScript; TanStack Start with file routes in `src/routes`.
 - Tailwind CSS v4 through `@tailwindcss/vite`; shadcn/ui Button and Card installed
-  with the official CLI. `@/*` resolves to `src/*` in Vite and TypeScript.
+  with the official CLI. Preset `b3loz0GWm`: Luma / Mauve / Orange / Inter / Lucide.
+  `@/*` resolves to `src/*` in Vite and TypeScript.
 - Nitro's supported `nitro/vite` integration uses the **netlify** preset for Node
   functions. Start server routes (including health) are served by Nitro.
 - Shared invoice/item/result types: `src/types/invoice.ts`. Server-only extraction
@@ -92,9 +91,21 @@ arithmetic uses `decimal.js` **10.6.0**. The worker is packaged locally; no CDN 
 used. All parser code and dependencies stay out of client bundles. See
 [parser design and limitations](docs/parser.md).
 
+## Using the website
+
+Select PDFs and click **Trích xuất hóa đơn**. The browser sends one file at a time
+(up to 4 MiB / 100 pages per PDF) to `/api/extract`. Results show invoice fields,
+line items and review warnings. Failures stay next to the filename; **Thử lại tệp
+lỗi** retries only unsuccessful files. Removing a file also removes its result.
+Uploads and results are not persisted; refreshing clears them. Scans need review
+because OCR is not implemented. The spreadsheet preview flattens each line item
+into one row and repeats its invoice fields. Choose `.xlsx` (the default) or `.csv`,
+then download the file. Invoice numbers and tax IDs are exported as text so leading
+zeros survive in Excel. Export happens in the browser; no workbook is stored.
+
 ## Remaining work
 
-Connect the multi-file homepage to the extraction API, add review/editing, validate
-with actual Rovin/3K/Xao Minh invoice PDFs, and generate an Excel workbook.
+Add review/editing and validate additional invoice layouts. The supplied Rovin,
+3K and Xảo Minh PDFs pass local extraction and spreadsheet-export checks.
 There is no Python service integration to configure. See
 [architecture](docs/architecture.md) and [local verification](docs/verification.md).

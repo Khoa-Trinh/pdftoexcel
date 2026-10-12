@@ -89,3 +89,80 @@ rechecked. Original non-fatal dependency bundling warnings remain.
 No actual Rovin, 3K or Xao Minh PDFs were supplied, so extraction parity on those
 specific layouts is not yet verified. No OCR, UI extraction workflow or Excel
 export is claimed. No site has been deployed to Netlify.
+
+## Frontend extraction workflow
+
+The homepage is now connected to the real TypeScript extraction API. Verified
+with Nub on 2026-10-12:
+
+- Strict type checking, linting, all 13 parser tests, production build and isolated
+  production-function verification passed.
+- Browser tests uploaded multiple generated PDFs through the real endpoint and
+  verified invoice identifiers with leading zeros, parsed line items and
+  Vietnamese decimal formatting.
+- Invalid PDFs show per-file errors without interrupting later files. Retry sends
+  only failed files. Simulated network failure followed by a real retry passed.
+- Picker/removal controls are disabled during processing. Removing a file removes
+  its results; removing all files restores the empty state.
+- Files over 4 MiB are rejected before upload. Scanned PDFs display review warnings.
+- Results fit a 390-pixel viewport; line-item tables scroll within their container.
+  Desktop/mobile screenshots were inspected, with no uncaught browser errors.
+- Client JS inspection found no PDF engine, native canvas or invoice parser code.
+- Excel export remains disabled. No cloud deployment was performed.
+
+These checks use synthetic PDFs; actual customer invoice layouts still need
+validation. Earlier disconnected-UI notes above describe the previous foundation.
+
+## Supplied invoice layouts
+
+Verified the three user-supplied PDFs locally on 2026-10-12. The original grid
+extractor found the 3K table but missed Rovin and Xảo Minh. A heading-based
+text-position fallback now recovers those rows; regex aliases support field-label
+variations without supplier-name rules.
+
+| Sample | Line items | VAT amount | Invoice total |
+| --- | ---: | ---: | ---: |
+| Xảo Minh, October 2026 | 1 | 280.000 | 3.780.000 |
+| Rovin, April 2026 | 2 | 178.800 | 2.413.800 |
+| 3K, May 2026 | 2 | 12.571.200 | 169.711.200 |
+
+Rendered originals were inspected. Browser uploads through the real frontend/API
+matched dates, series, invoice numbers, supplier tax IDs, subtotals, VAT and totals,
+and every description, quantity, unit price and line total. Leading zeros were
+preserved. All samples returned `extracted` with no validation issues. The mobile
+results page had no horizontal page overflow or uncaught browser errors.
+
+- All 17 parser tests, strict type checking and linting passed.
+- Production build and isolated generated-function verification passed.
+- The three actual PDFs also passed extraction through a copy of the emitted
+  function outside the project's node_modules.
+- Added synthetic regressions for label aliases, buyer/supplier separation,
+  borderless tables, wrapped headings/descriptions, optional columns and bank
+  branch numbers that must not become invoice numbers.
+
+Customer PDFs and diagnostic dumps were not added to the repository. Earlier
+notes about these layouts being unverified describe the preceding implementation.
+Additional layouts, OCR and editing remain future work. These are local results;
+no Netlify deployment was performed.
+
+## Spreadsheet export
+
+Verified locally on 2026-10-12 with ExcelJS 4.4.0. The results area was replaced
+by a spreadsheet preview. Each item is one row and repeats its invoice fields;
+an invoice without parsed items still receives one row.
+
+- XLSX is the default format; CSV can be selected.
+- A browser test extracted the three supplied PDFs and confirmed five preview
+  rows, then downloaded and reopened the XLSX workbook.
+- The workbook contains one `Chi tiết hóa đơn` sheet with the same five rows,
+  a frozen header, filters, numeric amount cells, and text formats for invoice
+  numbers and tax IDs. Leading-zero values were preserved.
+- The CSV download contains the same header and five rows with a UTF-8 BOM and
+  RFC-style quoting for commas, quotes and line breaks.
+- The empty-state download button is disabled, mobile layout has no page-level
+  horizontal overflow, and no browser errors occurred.
+- All 19 tests, strict type checking, linting, production build and isolated
+  generated-function verification passed.
+
+The earlier notes above saying export was disabled describe prior milestones.
+No Netlify deployment was performed.

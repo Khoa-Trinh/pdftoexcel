@@ -8,7 +8,7 @@ export interface InvoiceIssue {
 
 /** Unknown values are null; dates use YYYY-MM-DD and VAT rates are percentages. */
 export interface Invoice {
-  /** Stable reference used by line items; assigned by the future extraction service. */
+  /** Stable reference used by line items; assigned by the extraction service. */
   id: string
   sourceFilename: string
   date: string | null

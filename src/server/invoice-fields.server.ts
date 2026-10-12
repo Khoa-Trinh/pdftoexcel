@@ -1,5 +1,6 @@
 import '@tanstack/react-start/server-only'
 import { Decimal } from 'decimal.js'
+import { columnLabels, labelText, tableColumns } from './invoice-layout.server.ts'
 import type { InvoiceParserResult, ParsedInvoice, ParsedLineItem } from '../types/parser.ts'
 
 const Money = Decimal.clone({ precision: 50 })
@@ -35,15 +36,25 @@ function jsonNumber(value: Decimal): number {
   return result
 }
 
+/** Accent-insensitive label search; capture values from the original NFC text. */
 function match(pattern: string, text: string): string | null {
-  const value = new RegExp(pattern, 'imu').exec(text)?.[1]
-  return value === undefined ? null : clean(value)
+  const original = text.normalize('NFC')
+  const searchable = original.normalize('NFD').replace(/\p{M}/gu, '').replace(/[đĐ]/g, 'd')
+  const found = new RegExp(pattern, 'imud').exec(searchable)
+  const range = found?.indices?.[1]
+  return range ? clean(original.slice(range[0], range[1])) : null
 }
 
+const H = '[ \t]*'
+const COLON = `${H}(?:\\([^\\n)]*\\)${H})?[:：]?${H}`
+
+const REQUIRED_COLON = COLON.replace('[:：]?', '[:：]')
+
 function invoiceDate(text: string, issues: string[]): string | null {
-  const parts = /Ngày\s*(\d{1,2})\s*tháng\s*(\d{1,2})\s*năm\s*(\d{4})/iu.exec(text)
-  if (!parts) return null
-  const day = Number(parts[1]), month = Number(parts[2]), year = Number(parts[3])
+  const value = match('(?:^|[^a-z])ngay(?:[ \t]+(?:lap|hoa don))?[ \t]*:?[ \t]*(\\d{1,2}[ \t]*(?:thang|[/.-])[ \t]*\\d{1,2}[ \t]*(?:nam|[/.-])[ \t]*\\d{4})', text)
+  const parts = value?.match(/\d+/g)
+  if (!parts || parts.length !== 3) return null
+  const day = Number(parts[0]), month = Number(parts[1]), year = Number(parts[2])
   const date = new Date(0)
   date.setUTCFullYear(year, month - 1, day)
   date.setUTCHours(0, 0, 0, 0)
@@ -68,10 +79,8 @@ export function parseInvoicePages(pages: InvoicePage[], filename: string): Invoi
       let columns: number[] | null = null
       for (const row of table) {
         const cells = row.map(clean)
-        if (cells.includes('STT') && cells.some((cell) => cell.includes('Tên hàng hóa'))) {
-          const indices = ['STT', 'Tên hàng hóa', 'Đơn vị', 'Số lượng', 'Đơn giá', 'Thành tiền']
-            .map((label) => cells.findIndex((cell) => cell.includes(label)))
-          columns = indices.every((index) => index >= 0) ? indices : null
+        if (cells.some((cell) => columnLabels[0]!.test(labelText(cell))) && cells.some((cell) => columnLabels[1]!.test(labelText(cell)))) {
+          columns = tableColumns(cells)
           if (!columns) issues.push(`Page ${page.page}: unsupported table headers`)
           continue
         }
@@ -101,7 +110,7 @@ export function parseInvoicePages(pages: InvoicePage[], filename: string): Invoi
   const text = pages.map((page) => page.text.normalize('NFC')).join('\n')
   const headerText = pages.map((page) => page.headerText.normalize('NFC')).join('\n')
   function amount(label: string): Decimal | null {
-    const value = match(`${label}\\s*:\\s*([\\d.,]+)`, text)
+    const value = match(`(?:${label})${COLON}([\\d][\\d.,]*)`, text)
     if (value === null) return null
     try {
       const decimal = vietnameseNumber(value)
@@ -112,16 +121,20 @@ export function parseInvoicePages(pages: InvoicePage[], filename: string): Invoi
       return null
     }
   }
-  const subtotal = amount('Cộng tiền hàng'), vatRate = amount('Thuế suất GTGT'), vatAmount = amount('Tiền thuế GTGT')
-  const total = amount('Tổng\\s+(?:cộng\\s+)?(?:tiền\\s+)?thanh toán')
-  const tax = match('Mã số thuế\\s*:\\s*([\\d \\t-]+)', text)
+  const subtotal = amount('(?:cong|tong)(?: tien)? hang|tong tien (?:hang hoa|truoc thue)|tien hang')
+  const vatRate = amount('thue suat(?: (?:gtgt|vat))?|vat rate')
+  const vatAmount = amount('tien thue(?: (?:gtgt|vat))?|thue (?:gtgt|vat)|vat amount')
+  const total = amount('tong[ \t]+(?:cong[ \t]+)?(?:tien[ \t]+)?thanh toan|tong cong thanh toan')
+  // Do not pick the buyer's company/tax ID when the seller field is missing.
+  const sellerText = text.split(/(?:Họ tên người mua|Tên (?:đơn vị(?! bán hàng)|người mua)|Đơn vị mua hàng|Người mua hàng|Buyer)/iu)[0] ?? ''
+  const tax = match(`(?:ma so thue|mst|tax (?:id|code))${COLON}([\\d][\\d \t-]*)`, sellerText)
   const invoice: ParsedInvoice = {
     source_file: filename,
     invoice_date: invoiceDate(text, issues),
-    series: match('Ký hiệu\\s*:\\s*([A-Z0-9]+)', text),
+    series: match(`(?:ky hieu|invoice series)${COLON}([A-Z0-9]+)`, text),
     // JS \b is ASCII-only: no leading boundary before Vietnamese "Số".
-    invoice_number: match('(?:^|[^\\p{L}\\p{N}_])Số\\s*:\\s*(\\d+)\\b', headerText),
-    seller: match('(?:Đơn vị bán hàng:\\s*)?(CÔNG TY[^\\n]+)', text),
+    invoice_number: match(`(?:^|[^\\p{L}\\p{N}_])(?:so(?: hoa don)?|invoice (?:no|number))${REQUIRED_COLON}(\\d+)\\b`, headerText),
+    seller: match(`(?:don vi ban hang|ten (?:don vi ban hang|nguoi ban)|nguoi ban|seller)${COLON}([^\\n]+)`, sellerText) ?? match('(cong ty[^\\n]+)', sellerText),
     seller_tax_id: tax?.replace(/\s/gu, '') ?? null,
     subtotal: subtotal?.toNumber() ?? null,
     vat_rate: vatRate?.toNumber() ?? null,

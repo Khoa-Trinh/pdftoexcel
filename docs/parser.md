@@ -11,6 +11,14 @@ copied so PDF.js cannot detach caller-owned bytes. No temporary files are writte
   pdfplumber's table extraction. Its matching `pdfjs-dist` 5.4.296 dependency is
   declared directly because the reader uses PDF.js's public page text and
   operator APIs for visual ordering, stream ordering and image detection.
+- If the grid detector cannot find a supported table header, a PDF.js text-position
+  fallback matches column labels and assigns row text to those columns. This handles
+  centered/wrapped headers, optional extra columns, printed column guides and wrapped
+  descriptions without matching supplier names. It stops at totals/signature rows.
+- Invoice labels use accent-insensitive regex aliases (including numeric dates,
+  MST, VAT and common total labels); captured values retain their original accents.
+  Supplier fields are scoped before the buyer section. Invoice-number labels need
+  a separator so “Chi nhánh Số 10” cannot become the invoice number.
 - PDF.js positions provide top-to-bottom, left-to-right seller/field text.
   Original content-stream order is retained separately for invoice-number
   recovery, as the Python version used pypdf for this purpose.
@@ -52,24 +60,30 @@ app result. It accepts multipart `file`, limits the body before multipart parsin
 and enforces 4 MiB / 100 pages. It returns 400 for missing/multiple/empty/non-PDF
 files, 413 for large files, and 422 for malformed multipart, unreadable/encrypted
 PDFs or excess pages. Review results are HTTP 200 with `needs_review`. Successful
-responses use `Cache-Control: no-store`. The UI remains a foundation; batch
-orchestration, result display/editing and Excel export are still pending.
+responses use `Cache-Control: no-store`. The UI uploads multiple PDFs sequentially
+and shows a flattened spreadsheet preview plus per-file failures/retry. XLSX and
+CSV export are implemented in the browser. Editing remains pending.
 
 ## Differences and verification limits
 
 Table detection engines differ: this is a port of the field and validation rules,
 not a promise that PDF.js reproduces pdfplumber's cell segmentation for every PDF.
-Borderless, merged or broken grids may require more layout-specific work. Table
+The position fallback handles supported column labels without detected grid lines.
+Merged cells, headings split into individual characters and pages without repeated
+headers may require additional layout work. Table
 extraction failures preserve readable headers and require review. Invalid dates
 and malformed header amounts become review issues instead of crashing the whole
 file. JSON number safety checks and resource limits are additional protections.
 
 `nub run test` covers deterministic field rules and valid generated PDF bytes
 with a Unicode ToUnicode font map, ruled tables, reading-order differences,
-multiple pages and images. No production invoices are committed. The supplied
-script mentions Rovin, 3K and Xao Minh, but their PDFs were not attached, so parity
-with those specific layouts remains unverified. This port does not claim OCR or
-full invoice-format coverage.
+multiple pages and images, label aliases, supplier/buyer separation, borderless
+columns and wrapped descriptions. The three user-supplied Rovin, 3K and Xảo Minh
+PDFs were also checked against rendered originals and uploaded through the actual
+browser UI: all marked header fields and all five line items matched, including
+quantities, unit prices, VAT and totals. The originals stay outside the repository;
+regression fixtures contain synthetic data. These three samples do not establish
+full invoice-format coverage. There is no OCR.
 
 `nub run build && nub run verify:production` copies the emitted Netlify function
 into an isolated temporary directory and exercises real extraction and errors

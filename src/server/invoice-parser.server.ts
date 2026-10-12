@@ -3,6 +3,7 @@ import { PDFParse } from 'pdf-parse'
 import { getData } from 'pdf-parse/worker'
 import { getDocument, OPS, Util } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { TextItem } from 'pdfjs-dist/types/src/display/api.js'
+import { positionedTable, tableColumns } from './invoice-layout.server.ts'
 import { parseInvoicePages } from './invoice-fields.server.ts'
 import type { InvoicePage } from './invoice-fields.server.ts'
 import type { InvoiceParserResult } from '../types/parser.ts'
@@ -91,6 +92,14 @@ export async function extractInvoice(
           options.signal?.throwIfAborted()
           // Damaged/unsupported grids must not discard recoverable header text.
           extracted.issues = [`Page ${pageNumber}: table extraction failed; review required`]
+        }
+        if (!extracted.tables.some((table) => table.some((row) => tableColumns(row.map((cell) => cell ?? ''))))) {
+          const viewport = page.getViewport({ scale: 1 })
+          const fallback = positionedTable(textItems.map((item) => {
+            const transform = Util.transform(viewport.transform, item.transform)
+            return { text: item.str.normalize('NFC'), x: transform[4] ?? 0, y: transform[5] ?? 0, width: item.width, height: item.height }
+          }))
+          if (fallback) extracted.tables = [fallback]
         }
         pages.push(extracted)
       } finally {
