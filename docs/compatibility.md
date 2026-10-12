@@ -46,6 +46,9 @@ transitive versions and integrity hashes are locked in `pnpm-lock.yaml`.
 | `@tanstack/react-start` | `1.168.61` | Application/UI |
 | `class-variance-authority` | `0.7.1` | Application/UI |
 | `cn` | `0.4.0` | Application/UI |
+| `decimal.js` | `10.6.0` | Server decimal arithmetic |
+| `pdf-parse` | `2.4.5` | Server text/table PDF extraction |
+| `pdfjs-dist` | `5.4.296` | Server reading order/image detection |
 | `lucide-react` | `1.55.0` | Application/UI |
 | `radix-ui` | `1.8.0` | Application/UI |
 | `react` | `19.3.0` | Application/UI |
@@ -83,3 +86,12 @@ pnpm lockfile through Nub's native installer; `nub run <script>` runs the
 project scripts. This follows [Nub's documented lockfile compatibility](https://nubjs.com/docs/install).
 The pnpm packageManager pin and Netlify settings remain for hosted builds;
 no standalone local pnpm installation is required.
+
+## PDF parser dependencies
+
+The TypeScript port pins pdf-parse 2.4.5 and its matching pdfjs-dist 5.4.296 to
+share the same PDF.js worker/version. Node 24 is supported by their package
+engines. Decimal.js 10.6.0 replaces Python's Decimal for validation arithmetic.
+See [pdf-parse's versioned official README](https://github.com/mehmet-kozan/pdf-parse/blob/v2.4.5/README.md)
+and [parser architecture](parser.md). PDF parsing remains server-only, with a
+packaged worker and traced Node dependencies in the Nitro function output.

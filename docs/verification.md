@@ -37,8 +37,8 @@ Desktop and mobile screenshots were visually inspected. The final build retains
 non-fatal dependency `MODULE_LEVEL_DIRECTIVE` warnings; the Nitro/SSR server-entry
 collision warning was fixed by moving the Start entry to `src/server.ts`.
 
-No Netlify deployment, cloud resource creation, Python execution, invoice
-extraction or Excel export was performed. These results establish local behavior
+No Netlify deployment, cloud resource creation, Python execution or Excel export
+was performed. These initial foundation results establish local behavior
 and build output, not execution inside Netlify's deployed infrastructure.
 
 ## Nub verification
@@ -54,3 +54,38 @@ After switching the local instructions to Nub, verified with installed Nub
 
 The earlier browser checks remain recorded above. Netlify continues using its
 own provisioned pnpm; standalone pnpm is not required for local development.
+
+## TypeScript parser verification
+
+The Python attachment was ported to native TypeScript. All checks use Nub 0.9.0
+and Node 24.21.0:
+
+- `nub install --frozen-lockfile`: passed after adding the pinned PDF/decimal dependencies.
+- `nub run typecheck`, `nub run lint`: passed with parser, CLI and tests included.
+- `nub run test`: 13 tests passed. Covers Vietnamese decimal syntax/arithmetic,
+  leading-zero IDs, NFC normalization, header recovery, table column mapping,
+  calendar dates, missing data, arithmetic discrepancies and tolerance, scans,
+  unsafe numeric magnitude, actual generated Unicode PDFs and ruled tables,
+  multiple pages, reading-order differences, invalid PDFs, page limits,
+  pre-cancellation and mapping to shared application types.
+- `nub run build`: passed using the Nitro Netlify Node preset.
+- `nub run verify:production`: passed. The generated function was copied to a
+  temporary directory outside the workspace before invocation, verifying that
+  worker/native dependencies are packaged. Tested a valid PDF, image-only review,
+  malformed and non-PDF bytes, missing/multiple/oversized uploads, and health JSON.
+- `nub run parse:invoice /tmp/invoice-parser-fixture.pdf`: emitted valid
+  Python-compatible JSON with `OK`, the original leading-zero identifiers, and
+  the expected line item.
+- Real local HTTP `POST /api/extract` with multipart `file`: HTTP 200, expected
+  camelCase invoice/item data; `GET /api/health` remains correct.
+- Browser homepage selection/removal checks were rerun successfully after adding
+  the server endpoint; the UI remains disconnected from extraction.
+
+Vite's initial development dependency scan attempted to optimize a native canvas
+binding. Excluding Node-only PDF dependencies from browser optimization and
+externalizing them in SSR resolved it; development and production were both
+rechecked. Original non-fatal dependency bundling warnings remain.
+
+No actual Rovin, 3K or Xao Minh PDFs were supplied, so extraction parity on those
+specific layouts is not yet verified. No OCR, UI extraction workflow or Excel
+export is claimed. No site has been deployed to Netlify.

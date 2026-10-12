@@ -13,27 +13,31 @@ never in routes' client components or `VITE_*` variables. Shared data-only types
 live in `src/types/invoice.ts`. Invoice numbers, series and tax IDs are strings.
 Dates are ISO calendar dates, missing fields are null, VAT rates are percentage
 values, and line items reference `Invoice.id` with one-based PDF page numbers.
-Before implementing monetary calculations, decide decimal precision and rounding
-rules; JavaScript numbers in this initial contract are not an accounting engine.
+The TypeScript parser uses `decimal.js` internally for exact decimal arithmetic;
+JSON-facing amounts remain numbers. Downstream editing/export must still agree
+on currency rounding and precision rules.
 
-## Python extraction: pending decision
+## Native TypeScript extraction
 
-The inspected workspace did not contain `invoice_parser.py`. If supplied later,
-keep its PDF-bytes-to-JSON contract intact. Do not assume a Python interpreter or
-Python dependencies exist in Netlify's Nitro Node function. Choose and validate
-an integration before implementing extraction: for example, a separately hosted
-Python HTTP service, or an explicit port of the parser to a supported Node
-implementation. Hosting, authentication, timeouts, PDF size limits, retention,
-error mapping and schema validation remain undecided. A long-running parser may
-need a job-based service rather than a synchronous serverless request.
+The supplied Python parser has been ported into server-only modules. There is no
+Python process, Python dependency or remote parser. `invoice-parser.server.ts`
+reads PDF bytes, `invoice-fields.server.ts` applies field/table/validation rules,
+and `extraction-service.server.ts` maps the original snake_case result to shared
+application types. The source attachment is retained outside this project; no
+Python file existed in the workspace to replace.
 
-The `ExtractionService` interface defines the future adapter boundary. There is
-no adapter, extraction endpoint, upload request, storage or mock extraction data.
-Files currently remain in browser memory until removed, refreshed or closed.
+`POST /api/extract` accepts one multipart `file` and calls the real adapter. It
+bounds the received body, validates the PDF signature, limits files to 4 MiB and
+documents to 100 pages, returns safe errors and does not persist uploads. This is
+a synchronous parser endpoint, not a batch queue or storage service. The browser
+homepage is not yet connected to it; selected files there remain local.
+
+[Parser details and known differences](parser.md) describe the PDF engines,
+worker packaging, review rules and test coverage.
 
 ## Next implementation work
 
-- Connect a real extraction adapter and validate returned invoice/item data.
+- Validate real customer invoice layouts and connect the multi-file homepage to the adapter.
 - Add upload limits and clear per-file failure/retry feedback.
 - Build review/edit controls and show validation issues before export.
 - Choose an Excel library and generate a workbook with invoice and item sheets;
