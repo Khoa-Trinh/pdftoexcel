@@ -74,3 +74,12 @@ pnpm dlx shadcn@4.21.4 add button card --yes
 ```
 
 Its generated `components.json`, UI source and CSS remain in the repository.
+
+## Nub local workflow
+
+Local setup now uses the OS-installed Nub **0.9.0**, with Node **24.21.0**
+resolved from `.nvmrc`. `nub install --frozen-lockfile` reads the existing
+pnpm lockfile through Nub's native installer; `nub run <script>` runs the
+project scripts. This follows [Nub's documented lockfile compatibility](https://nubjs.com/docs/install).
+The pnpm packageManager pin and Netlify settings remain for hosted builds;
+no standalone local pnpm installation is required.

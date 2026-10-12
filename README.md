@@ -7,17 +7,26 @@ or extraction yet. No environment variables are needed.
 
 ## Local development
 
-Use Node **24.x** (`nvm use`) and **pnpm 10.34.7**, pinned in `package.json`.
+Use your installed **Nub** (verified with **0.9.0**). Nub resolves Node **24.x**
+from `.nvmrc` and installs dependencies directly from `pnpm-lock.yaml`; a separate
+pnpm or nvm installation is not required. See [Nub's package manager docs](https://nubjs.com/docs/install).
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm dev                         # http://127.0.0.1:3000
-pnpm typecheck
-pnpm lint
-pnpm build
-pnpm preview                     # production preview; stop dev first
+nub install --frozen-lockfile
+nub run dev                         # http://127.0.0.1:3000
+nub run typecheck
+nub run lint
+nub run build
+nub run preview                     # production preview; stop dev first
 curl http://127.0.0.1:3000/api/health
 ```
+
+If a non-interactive shell cannot find your existing Nub installation, expose it
+for that shell with `export PATH="$HOME/.nub/bin:$PATH"`.
+
+The `packageManager` pnpm pin and lockfile remain for Netlify and tool
+compatibility. Local `nub install` uses Nub's native installer, not a separately
+installed pnpm executable.
 
 Health returns `{"ok":true,"service":"invoice-extractor"}`.
 
@@ -40,7 +49,9 @@ under active development.
 
 Connect this repository manually when ready. Project root is the build base.
 `netlify.toml` sets **build: `pnpm build`**, **publish: `dist`**, **Node: `24`**, and
-**pnpm: `10.34.7`**. The committed lockfile supports reproducible installation.
+**pnpm: `10.34.7`**. Netlify provisions the package manager in its own build
+environment; your machine only needs Nub. The committed lockfile supports
+reproducible installation.
 Do not add Netlify's TanStack Vite plugin alongside Nitro or change publish to
 `dist/client`: those settings belong to a different adapter.
 

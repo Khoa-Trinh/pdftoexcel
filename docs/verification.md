@@ -40,3 +40,17 @@ collision warning was fixed by moving the Start entry to `src/server.ts`.
 No Netlify deployment, cloud resource creation, Python execution, invoice
 extraction or Excel export was performed. These results establish local behavior
 and build output, not execution inside Netlify's deployed infrastructure.
+
+## Nub verification
+
+After switching the local instructions to Nub, verified with installed Nub
+**0.9.0** and Node **24.21.0**:
+
+- `nub install --frozen-lockfile`: passed; the committed pnpm lockfile was unchanged.
+- `nub run typecheck`: passed.
+- `nub run lint`: passed.
+- `nub run build`: passed with the same documented non-fatal dependency warnings.
+- `nub run dev`: homepage HTTP 200 with Vietnamese title; health returned the exact JSON.
+
+The earlier browser checks remain recorded above. Netlify continues using its
+own provisioned pnpm; standalone pnpm is not required for local development.
