@@ -41,28 +41,35 @@ function Home() {
     if (extracting.current || pending.length === 0) return
     extracting.current = true
     setNotice('')
+    let worker: Worker | undefined
     try {
-      // One request at a time keeps PDF parsing memory bounded on the server.
+      worker = new Worker(new URL('../workers/extract.worker.ts', import.meta.url), { type: 'module' })
+      // One file at a time bounds memory while keeping PDF work off the UI thread.
       for (const [index, file] of pending.entries()) {
         setProgress({ current: index + 1, total: pending.length })
         let outcome: FileOutcome
         try {
           if (file.size > 4 * 1024 * 1024) throw new Error('Tệp PDF quá lớn (tối đa 4 MB).')
-          const form = new FormData()
-          form.append('file', file)
-          const response = await fetch('/api/extract', { method: 'POST', body: form })
-          if (!response.headers.get('content-type')?.includes('application/json')) {
-            throw new Error('Máy chủ không phản hồi. Vui lòng thử lại.')
-          }
-          const data = await response.json()
-          if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Không thể đọc PDF. Vui lòng thử lại.')
-          outcome = { result: data as ExtractionResult }
+          const bytes = await file.arrayBuffer()
+          const result = await new Promise<ExtractionResult>((resolve, reject) => {
+            worker!.onmessage = (event: MessageEvent<{ id: number; result?: ExtractionResult; error?: string }>) => {
+              if (event.data.id !== index) return
+              if (event.data.result) resolve(event.data.result)
+              else reject(new Error(event.data.error ?? 'Không thể đọc PDF.'))
+            }
+            worker!.onerror = () => reject(new Error('Không thể khởi chạy bộ đọc PDF.'))
+            worker!.postMessage({ id: index, filename: file.name, bytes }, [bytes])
+          })
+          outcome = { result }
         } catch (error) {
-          outcome = { error: error instanceof TypeError ? 'Không thể kết nối máy chủ. Vui lòng thử lại.' : error instanceof Error ? error.message : 'Không thể đọc PDF. Vui lòng thử lại.' }
+          outcome = { error: error instanceof Error ? error.message : 'Không thể đọc PDF. Vui lòng thử lại.' }
         }
         setOutcomes((current) => ({ ...current, [fileKey(file)]: outcome }))
       }
+    } catch {
+      setNotice('Không thể khởi chạy bộ đọc PDF.')
     } finally {
+      worker?.terminate()
       extracting.current = false
       setProgress(null)
     }

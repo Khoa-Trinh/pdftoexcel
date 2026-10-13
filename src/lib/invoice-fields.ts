@@ -1,6 +1,5 @@
-import '@tanstack/react-start/server-only'
 import { Decimal } from 'decimal.js'
-import { columnLabels, labelText, tableColumns } from './invoice-layout.server.ts'
+import { columnLabels, labelText, tableColumns } from './invoice-layout.ts'
 import type { InvoiceParserResult, ParsedInvoice, ParsedLineItem } from '../types/parser.ts'
 
 const Money = Decimal.clone({ precision: 50 })

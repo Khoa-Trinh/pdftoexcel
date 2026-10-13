@@ -1,46 +1,33 @@
-# Architecture and integration decisions
+# Current architecture
 
-The browser runs React with TanStack Router file-based routes. TanStack Start
-renders the document on the server and strips server route handlers from the
-client build. Nitro's Vite integration serves Start and builds a Node serverless
-function with the `netlify` preset. There is no Vinxi configuration and no
-`@netlify/vite-plugin-tanstack-start` dependency.
+The app uses TanStack Start's file routes and SSR. Nitro's `nitro/vite` plugin
+builds the `cloudflare_module` Worker, and Wrangler serves `.output/public` as
+Workers Static Assets. `GET /api/health` is the only application API. There is
+no Netlify adapter, Cloudflare Vite plugin, or PDF upload endpoint.
 
-`src/routes/api/health.ts` is a Start server route served by Nitro. Its GET handler
-returns JSON. `src/server/extraction-service.server.ts` is guarded with Start's
-`server-only` import; future credentials and adapters belong in that directory,
-never in routes' client components or `VITE_*` variables. Shared data-only types
-live in `src/types/invoice.ts`. Invoice numbers, series and tax IDs are strings.
-Dates are ISO calendar dates, missing fields are null, VAT rates are percentage
-values, and line items reference `Invoice.id` with one-based PDF page numbers.
-The TypeScript parser uses `decimal.js` internally for exact decimal arithmetic;
-JSON-facing amounts remain numbers. Downstream editing/export must still agree
-on currency rounding and precision rules.
+The PDF picker keeps `File` objects in browser memory. A dedicated module Web
+Worker in `src/workers/extract.worker.ts` receives one file at a time and returns
+one `ExtractionResult`; the transferred buffer avoids copying PDF bytes back to
+the main thread. PDF.js runs inside that worker, with its own bundled PDF worker
+asset loaded from Vite's build output. `src/lib/invoice-layout.ts` reconstructs
+rows from text coordinates. `src/lib/invoice-fields.ts` applies regex aliases,
+Vietnamese number rules, and decimal reconciliation. These modules are shared
+with the retained local Node CLI, but are absent from the Cloudflare server
+bundle.
 
-## Native TypeScript extraction
+React stores the selected files and results in memory. XLSX and CSV are generated
+on demand in the browser. The existing XLSX output has one flattened item sheet:
+invoice fields repeat on each item row. Invoice numbers and tax IDs remain text;
+amounts remain numeric. The app sends no invoice content to Cloudflare.
 
-The supplied Python parser has been ported into server-only modules. There is no
-Python process, Python dependency or remote parser. `invoice-parser.server.ts`
-reads PDF bytes, `invoice-fields.server.ts` applies field/table/validation rules,
-and `extraction-service.server.ts` maps the original snake_case result to shared
-application types. The source attachment is retained outside this project; no
-Python file existed in the workspace to replace.
+Development uses Nitro's Node preset for Vite hot reload. Production builds use
+Nitro's Cloudflare module preset, and `nub run preview` starts Wrangler/workerd
+against the generated Worker. The current Nitro Vite Cloudflare dev runner did
+not work with the installed Miniflare 5 API; this split keeps both a usable dev
+loop and a verified Cloudflare production preview.
 
-`POST /api/extract` accepts one multipart `file` and calls the real adapter. It
-bounds the received body, validates the PDF signature, limits files to 4 MiB and
-documents to 100 pages, returns safe errors and does not persist uploads. This is
-a synchronous parser endpoint, not a batch queue or storage service. The browser
-homepage uploads selected PDFs sequentially to bound concurrent parsing work,
-keeps per-file results/errors in memory, and retries only unsuccessful files.
-Picker/removal controls are locked during extraction. Removing a file clears its
-result. The UI imports only shared types; PDF libraries stay on the server.
-
-[Parser details and known differences](parser.md) describe the PDF engines,
-worker packaging, review rules and test coverage.
-
-## Next implementation work
-
-- Expand layout coverage beyond the three validated Rovin, 3K and Xảo Minh samples.
-- Build review/edit controls; validation issues are already shown alongside results.
-- Add review/edit controls. Spreadsheet export is implemented as one flattened
-  item sheet in XLSX or CSV; identifiers remain text and amounts remain numeric.
+The retained `src/server/invoice-parser.server.ts` and
+`src/server/extraction-service.server.ts` support local CLI/tests only. They use
+Node and `pdf-parse` and are not imported by server routes or bundled into the
+Cloudflare Worker. No Python runtime is required; the supplied Python source
+remains an external reference.

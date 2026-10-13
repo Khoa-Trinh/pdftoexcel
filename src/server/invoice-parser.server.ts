@@ -3,9 +3,9 @@ import { PDFParse } from 'pdf-parse'
 import { getData } from 'pdf-parse/worker'
 import { getDocument, OPS, Util } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { TextItem } from 'pdfjs-dist/types/src/display/api.js'
-import { positionedTable, tableColumns } from './invoice-layout.server.ts'
-import { parseInvoicePages } from './invoice-fields.server.ts'
-import type { InvoicePage } from './invoice-fields.server.ts'
+import { positionedTable, tableColumns } from '../lib/invoice-layout.ts'
+import { parseInvoicePages } from '../lib/invoice-fields.ts'
+import type { InvoicePage } from '../lib/invoice-fields.ts'
 import type { InvoiceParserResult } from '../types/parser.ts'
 
 // Embed the packaged worker: no CDN, browser worker, or cwd-relative asset path.

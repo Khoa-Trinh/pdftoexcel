@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { parseInvoicePages, vietnameseNumber } from '../src/server/invoice-fields.server.ts'
+import { parseInvoicePages, vietnameseNumber } from '../src/lib/invoice-fields.ts'
 import { extractInvoice } from '../src/server/invoice-parser.server.ts'
 import { typescriptExtractionService } from '../src/server/extraction-service.server.ts'
 import { fixturePdf, headers, invoiceFixture, invoiceText } from './pdf-fixture.ts'
-import type { InvoicePage } from '../src/server/invoice-fields.server.ts'
+import type { InvoicePage } from '../src/lib/invoice-fields.ts'
 
 function page(overrides: Partial<InvoicePage> = {}): InvoicePage {
   return { page: 1, text: invoiceText, headerText: invoiceText, hasImages: false,

@@ -80,7 +80,7 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 export async function downloadSpreadsheet(rows: SpreadsheetRow[], format: SheetFormat) {
-  // Vite removes the exporter from the SSR/Netlify bundle. Workbooks are created
+  // Vite removes the exporter from the SSR/Cloudflare bundle. Workbooks are created
   // only after a user clicks download in the browser.
   if (import.meta.env.SSR) return
   const filename = `hoa-don-${new Date().toISOString().slice(0, 10)}.${format}`

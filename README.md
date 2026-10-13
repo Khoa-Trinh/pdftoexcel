@@ -1,111 +1,75 @@
 # invoice-extractor
 
-Foundation for a Vietnamese PDF invoice extraction website. Includes a responsive
-Vietnamese homepage with multi-PDF selection/removal and extraction of invoice
-fields and line items. A native TypeScript parser runs through a server API; the
-CLI is also available. No environment variables or Python runtime are needed.
+Vietnamese PDF invoice extraction with TanStack Start, React, strict TypeScript,
+Tailwind CSS v4, and the shadcn/ui `b3loz0GWm` preset. The app is prepared for
+Cloudflare Workers and Workers Static Assets. It has **not been deployed**.
 
 ## Local development
 
-Use your installed **Nub** (verified with **0.9.0**). Nub resolves Node **24.x**
-from `.nvmrc` and installs dependencies directly from `pnpm-lock.yaml`; a separate
-pnpm or nvm installation is not required. See [Nub's package manager docs](https://nubjs.com/docs/install).
+Node 24 is selected by `.nvmrc`. Use the installed Nub package manager locally;
+the committed `pnpm-lock.yaml` is also suitable for pnpm in CI.
 
 ```sh
 nub install --frozen-lockfile
-nub run dev                         # http://127.0.0.1:3000
+nub run dev                 # http://127.0.0.1:3000, Vite hot reload
 nub run typecheck
 nub run lint
-nub run test                        # parser unit and generated-PDF tests
+nub run test
 nub run build
-nub run verify:production           # checks the emitted function in isolation
-nub run preview                     # production preview; stop dev first
-curl http://127.0.0.1:3000/api/health
+nub run cf:typegen          # regenerate Cloudflare runtime/binding types
+nub run preview             # builds, then runs the real Workers runtime locally
 ```
 
-If a non-interactive shell cannot find your existing Nub installation, expose it
-for that shell with `export PATH="$HOME/.nub/bin:$PATH"`.
+`GET /api/health` returns `{"ok":true,"service":"invoice-extractor"}`. During
+development Vite uses Nitro's local Node preset for fast reload; `preview` uses
+Wrangler/workerd and the production `cloudflare_module` build. If port 3000 is
+occupied, run `nub exec wrangler dev --config wrangler.jsonc --port 3001` after
+`nub run build`.
 
-The `packageManager` pnpm pin and lockfile remain for Netlify and tool
-compatibility. Local `nub install` uses Nub's native installer, not a separately
-installed pnpm executable.
+## Cloudflare deployment
 
-Health returns `{"ok":true,"service":"invoice-extractor"}`.
+`wrangler.jsonc` points to Nitro's `.output/server/index.mjs` Worker and
+`.output/public` static assets. The build output is generated; do not commit it.
+There is one deployment adapter: Nitro's Cloudflare module preset. The
+Cloudflare Vite plugin is intentionally absent.
 
-## Architecture
+```sh
+nub run deploy:dry-run       # build and validate upload locally; no publication
+nub exec wrangler login      # authenticate when ready to deploy
+nub run deploy               # builds and publishes to Cloudflare Workers
+```
 
-- React + strict TypeScript; TanStack Start with file routes in `src/routes`.
-- Tailwind CSS v4 through `@tailwindcss/vite`; shadcn/ui Button and Card installed
-  with the official CLI. Preset `b3loz0GWm`: Luma / Mauve / Orange / Inter / Lucide.
-  `@/*` resolves to `src/*` in Vite and TypeScript.
-- Nitro's supported `nitro/vite` integration uses the **netlify** preset for Node
-  functions. Start server routes (including health) are served by Nitro.
-- Shared invoice/item/result types: `src/types/invoice.ts`. Server-only extraction
-  adapter: `src/server/extraction-service.server.ts`. Keep credentials and future
-  adapters server-only; never put secrets in `VITE_*` variables.
+For a pnpm-based CI environment, use `pnpm install --frozen-lockfile` and
+`pnpm run deploy`. Publishing requires a Cloudflare account and may create a
+`*.workers.dev` Worker. No cloud resources were created by this migration.
 
-[Compatibility and pinned versions](docs/compatibility.md) records the official
-docs and selected versions. Nitro is a pinned beta; its Vite integration remains
-under active development.
+Cloudflare chooses the execution location based on its network. This does not
+guarantee a Singapore server or Singapore data residency. The Workers Free plan
+currently allows 100,000 Worker requests per day and 10 ms CPU time per request;
+static asset requests are free. The PDF and XLSX work happens in the browser so
+those operations do not consume Worker CPU. [Current limits](https://developers.cloudflare.com/workers/platform/limits/)
+and [placement rules](https://developers.cloudflare.com/workers/configuration/placement/)
+are maintained by Cloudflare.
 
-## Netlify setup (prepared, not deployed)
+## Data flow and limits
 
-Connect this repository manually when ready. Project root is the build base.
-`netlify.toml` sets **build: `pnpm build`**, **publish: `dist`**, **Node: `24`**, and
-**pnpm: `10.34.7`**. Netlify provisions the package manager in its own build
-environment; your machine only needs Nub. The committed lockfile supports
-reproducible installation.
-Do not add Netlify's TanStack Vite plugin alongside Nitro or change publish to
-`dist/client`: those settings belong to a different adapter.
+The PDF picker accepts multiple files. A dedicated browser Web Worker reads each
+file with PDF.js and reconstructs fields and item rows using text coordinates.
+It processes one file at a time so PDF memory use stays bounded; each file gets
+its own result or error. Files are limited to 4 MiB and 100 pages. Scanned,
+encrypted, damaged, or unsupported PDFs need manual review. OCR is not included.
+The three supplied Rovin, 3K, and Xảo Minh invoices produce five item rows in
+local browser checks.
 
-The verified build emits static JS/CSS/fonts in `dist/assets`, and a Node function
-at `.netlify/functions-internal/server/server.mjs` with `main.mjs` and supporting
-chunks. Nitro generates catch-all routing (`path: "/*"`, `preferStatic: true`) in
-the function's config, plus `.netlify/functions-internal/nitro.json` metadata.
-Netlify picks up its internal functions directory; no custom SPA redirect or
-functions directory override is needed. Run the build on Netlify's Linux builder.
-Do not commit generated deployment output.
-
-No cloud resources have been created and no site has been deployed. Local build
-and preview checks do not verify a real Netlify deployment.
-
-## TypeScript invoice parser
+The spreadsheet preview and XLSX/CSV downloads run locally in the browser.
+Invoice numbers and tax IDs remain text. No PDF bytes or extracted fields are
+posted to Cloudflare, analytics, or storage. Refreshing the page clears them.
+The old Node parser and CLI remain as local references:
 
 ```sh
 nub run parse:invoice /path/to/invoice.pdf
-# Or POST one multipart file to the local backend:
-curl -F 'file=@/path/to/invoice.pdf' http://127.0.0.1:3000/api/extract
 ```
 
-`extractInvoice(bytes, filename)` in `src/server/invoice-parser.server.ts` preserves
-the supplied Python script's snake_case JSON contract, including `OK`/`REVIEW`,
-issues and processing time. The `ExtractionService` adapter and API return the
-app's camelCase types with `extracted`/`needs_review` statuses and item references.
-Invoice numbers and tax IDs remain strings. `decimal.js` handles arithmetic before
-conversion to JSON numbers. Scanned/unsupported layouts require review; no OCR or
-fake data is provided. The API accepts one PDF up to 4 MiB / 100 pages and does not
-store it. Malformed or password-protected PDFs return a safe error.
-
-The PDF engine uses `pdf-parse` **2.4.5** and matching PDF.js **5.4.296**; decimal
-arithmetic uses `decimal.js` **10.6.0**. The worker is packaged locally; no CDN is
-used. All parser code and dependencies stay out of client bundles. See
-[parser design and limitations](docs/parser.md).
-
-## Using the website
-
-Select PDFs and click **Trích xuất hóa đơn**. The browser sends one file at a time
-(up to 4 MiB / 100 pages per PDF) to `/api/extract`. Results show invoice fields,
-line items and review warnings. Failures stay next to the filename; **Thử lại tệp
-lỗi** retries only unsuccessful files. Removing a file also removes its result.
-Uploads and results are not persisted; refreshing clears them. Scans need review
-because OCR is not implemented. The spreadsheet preview flattens each line item
-into one row and repeats its invoice fields. Choose `.xlsx` (the default) or `.csv`,
-then download the file. Invoice numbers and tax IDs are exported as text so leading
-zeros survive in Excel. Export happens in the browser; no workbook is stored.
-
-## Remaining work
-
-Add review/editing and validate additional invoice layouts. The supplied Rovin,
-3K and Xảo Minh PDFs pass local extraction and spreadsheet-export checks.
-There is no Python service integration to configure. See
-[architecture](docs/architecture.md) and [local verification](docs/verification.md).
+See [architecture](docs/architecture.md), [parser details](docs/parser.md),
+and [verification](docs/verification.md). Editing the extracted cells, drag-and-drop,
+and OCR are not implemented.

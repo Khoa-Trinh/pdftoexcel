@@ -1,4 +1,3 @@
-import '@tanstack/react-start/server-only'
 
 /** Match labels regardless of accents, casing, punctuation or wrapped lines. */
 export function labelText(value: string): string {

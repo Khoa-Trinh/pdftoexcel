@@ -2,7 +2,8 @@ node_modules/
 dist/
 .output/
 .nitro/
-.netlify/
+.wrangler/
+worker-configuration.d.ts
 .tanstack/
 coverage/
 test-results/

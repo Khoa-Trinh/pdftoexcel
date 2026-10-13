@@ -1,91 +1,24 @@
-# TypeScript invoice parser
+# Invoice parsing
 
-The supplied Python `extract_invoice(pdf_bytes, filename)` is ported to
-`extractInvoice(pdfBytes: Uint8Array, filename = 'invoice.pdf')` in
-`src/server/invoice-parser.server.ts`. Buffers are accepted as Uint8Array; input is
-copied so PDF.js cannot detach caller-owned bytes. No temporary files are written.
+The deployed app parses PDFs locally in a browser Web Worker. PDF.js extracts text
+tokens and page coordinates; its PDF worker is bundled by Vite rather than loaded
+from a CDN. `positionedTable` finds column headings and maps tokens into item
+rows by position. It handles the supplied Rovin, 3K, and Xảo Minh layouts,
+including wrapped headings and an extra Rovin column. Concatenated page text is
+used for header labels, not as the sole source of table row order.
 
-## Implementation
+`parseInvoicePages` normalizes Unicode and recognizes Vietnamese label aliases.
+It keeps invoice numbers and tax IDs as strings. Numbers use dot thousands and
+comma decimal separators: `32.000` is 32000, `109,375` is 109.375, and
+`350.000,00` is 350000. Decimal.js handles arithmetic internally. Missing fields,
+unrecognized tables, scanned pages, and arithmetic differences above one đồng
+produce review issues. OCR is not available. Damaged or encrypted PDFs get a
+per-file error, allowing the rest of a batch to finish.
 
-- `pdf-parse` 2.4.5 detects ruled tables and returns cell arrays, replacing
-  pdfplumber's table extraction. Its matching `pdfjs-dist` 5.4.296 dependency is
-  declared directly because the reader uses PDF.js's public page text and
-  operator APIs for visual ordering, stream ordering and image detection.
-- If the grid detector cannot find a supported table header, a PDF.js text-position
-  fallback matches column labels and assigns row text to those columns. This handles
-  centered/wrapped headers, optional extra columns, printed column guides and wrapped
-  descriptions without matching supplier names. It stops at totals/signature rows.
-- Invoice labels use accent-insensitive regex aliases (including numeric dates,
-  MST, VAT and common total labels); captured values retain their original accents.
-  Supplier fields are scoped before the buyer section. Invoice-number labels need
-  a separator so “Chi nhánh Số 10” cannot become the invoice number.
-- PDF.js positions provide top-to-bottom, left-to-right seller/field text.
-  Original content-stream order is retained separately for invoice-number
-  recovery, as the Python version used pypdf for this purpose.
-- `pdf-parse/worker` supplies the bundled worker via a data URL. There is no
-  network dependency, process-working-directory lookup or browser worker asset.
-  The dependency's Node canvas support is a transitive native dependency, traced
-  into the Linux function; no Python interpreter is involved. Vite excludes the
-  Node-only PDF packages from browser dependency optimization and leaves them
-  external to development SSR so native bindings are loaded by Node. Build deployment
-  artifacts on the target OS/architecture.
-- Unicode is normalized to NFC. Vietnamese numbers accept dot thousands groups
-  and comma decimals. Decimal.js arithmetic uses 50 significant digits internally;
-  values become JSON numbers only at the output boundary. Values beyond the safe
-  JSON numeric magnitude are rejected for review rather than silently corrupted.
-- STT/header mapping, printed column-guide skipping, item fields, one-based PDF
-  pages, leading-zero identifiers, missing-field checks and all three arithmetic
-  checks are preserved. A discrepancy strictly greater than 1 triggers review.
-- A short-text page containing image operators triggers OCR/review. Unsupported
-  layouts and missing items also trigger review; there is no OCR fallback.
-- `finally` blocks free PDF resources. Cancellation is checked between stages
-  and destroys active documents; it cannot preempt synchronous CPU work.
+Browser inputs are limited to 4 MiB per file and 100 pages; files are processed
+sequentially. PDF bytes never reach the Cloudflare Worker. The old Node parser
+and `nub run parse:invoice` CLI remain in `src/server` for comparison with the
+original Python JSON contract. They are excluded from the Cloudflare bundle.
 
-`src/types/parser.ts` describes the preserved snake_case JSON contract: invoice
-status is `OK` or `REVIEW`, `issues` is a semicolon-separated string, and
-`processing_ms` records elapsed time. Items include source filename, series and
-invoice number. `typescriptExtractionService` adapts it to the existing camelCase
-app types and adds an invoice ID referenced by every item.
-
-## API and CLI
-
-```sh
-nub run parse:invoice /path/to/invoice.pdf
-nub run dev
-curl -F 'file=@/path/to/invoice.pdf' http://127.0.0.1:3000/api/extract
-```
-
-The CLI emits the original-compatible JSON. The single-file API emits the shared
-app result. It accepts multipart `file`, limits the body before multipart parsing,
-and enforces 4 MiB / 100 pages. It returns 400 for missing/multiple/empty/non-PDF
-files, 413 for large files, and 422 for malformed multipart, unreadable/encrypted
-PDFs or excess pages. Review results are HTTP 200 with `needs_review`. Successful
-responses use `Cache-Control: no-store`. The UI uploads multiple PDFs sequentially
-and shows a flattened spreadsheet preview plus per-file failures/retry. XLSX and
-CSV export are implemented in the browser. Editing remains pending.
-
-## Differences and verification limits
-
-Table detection engines differ: this is a port of the field and validation rules,
-not a promise that PDF.js reproduces pdfplumber's cell segmentation for every PDF.
-The position fallback handles supported column labels without detected grid lines.
-Merged cells, headings split into individual characters and pages without repeated
-headers may require additional layout work. Table
-extraction failures preserve readable headers and require review. Invalid dates
-and malformed header amounts become review issues instead of crashing the whole
-file. JSON number safety checks and resource limits are additional protections.
-
-`nub run test` covers deterministic field rules and valid generated PDF bytes
-with a Unicode ToUnicode font map, ruled tables, reading-order differences,
-multiple pages and images, label aliases, supplier/buyer separation, borderless
-columns and wrapped descriptions. The three user-supplied Rovin, 3K and Xảo Minh
-PDFs were also checked against rendered originals and uploaded through the actual
-browser UI: all marked header fields and all five line items matched, including
-quantities, unit prices, VAT and totals. The originals stay outside the repository;
-regression fixtures contain synthetic data. These three samples do not establish
-full invoice-format coverage. There is no OCR.
-
-`nub run build && nub run verify:production` copies the emitted Netlify function
-into an isolated temporary directory and exercises real extraction and errors
-without the project's node_modules. This verifies local Node packaging, not an
-actual Netlify deployment.
+More suppliers and unusual merged tables will need additional layout handling.
+The current spreadsheet preview is read-only.

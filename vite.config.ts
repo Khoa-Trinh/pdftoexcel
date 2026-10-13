@@ -5,13 +5,12 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { nitro } from 'nitro/vite'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
-  plugins: [tanstackStart(), react(), tailwindcss(), nitro({ preset: 'netlify' })],
-  // Node-only PDF libraries contain native canvas bindings, not browser modules.
-  optimizeDeps: { exclude: ['pdf-parse', 'pdfjs-dist', '@napi-rs/canvas'] },
-  ssr: { external: ['pdf-parse', 'pdfjs-dist', '@napi-rs/canvas'] },
+  // The Cloudflare preset builds the deployment. Node keeps Vite's hot-reload
+  // development loop usable; `preview` runs the built app in workerd.
+  plugins: [tanstackStart(), react(), tailwindcss(), nitro({ preset: command === 'serve' ? 'node' : 'cloudflare_module' })],
   environments: {
     ssr: { build: { rollupOptions: { input: './src/server.ts' } } },
   },
-})
+}))
