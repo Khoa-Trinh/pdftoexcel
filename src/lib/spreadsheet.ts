@@ -10,8 +10,8 @@ export const spreadsheetColumns = [
   { key: 'supplierName', label: 'Nhà cung cấp' },
   { key: 'supplierTaxId', label: 'Mã số thuế' },
   { key: 'subtotal', label: 'Tiền hàng' },
-  { key: 'vatRate', label: 'Thuế suất GTGT (%)' },
-  { key: 'vatAmount', label: 'Tiền thuế GTGT' },
+  { key: 'vatRate', label: 'Thuế suất GTGT dòng (%)' },
+  { key: 'vatAmount', label: 'Tổng tiền thuế GTGT' },
   { key: 'total', label: 'Tổng thanh toán' },
   { key: 'status', label: 'Trạng thái' },
   { key: 'issues', label: 'Lưu ý' },
@@ -22,6 +22,8 @@ export const spreadsheetColumns = [
   { key: 'quantity', label: 'Số lượng' },
   { key: 'unitPrice', label: 'Đơn giá' },
   { key: 'lineTotal', label: 'Thành tiền' },
+  { key: 'lineVatAmount', label: 'Tiền thuế dòng' },
+  { key: 'lineTotalWithVat', label: 'Thành tiền sau thuế' },
 ] as const
 
 export type SpreadsheetColumnKey = typeof spreadsheetColumns[number]['key']
@@ -38,7 +40,6 @@ export function flattenExtractionResults(results: ExtractionResult[]): Spreadshe
       supplierName: invoice.supplierName,
       supplierTaxId: invoice.supplierTaxId,
       subtotal: invoice.subtotal,
-      vatRate: invoice.vatRate,
       vatAmount: invoice.vatAmount,
       total: invoice.total,
       status: invoice.status === 'needs_review' ? 'Cần kiểm tra' : 'Đã trích xuất',
@@ -47,6 +48,7 @@ export function flattenExtractionResults(results: ExtractionResult[]): Spreadshe
     const sourceItems = items.length > 0 ? items : [null]
     return sourceItems.map((item): SpreadsheetRow => ({
       ...invoiceValues,
+      vatRate: item?.vatRate ?? invoice.vatRate,
       page: item?.page ?? null,
       itemNumber: item?.itemNumber ?? null,
       description: item?.description ?? null,
@@ -54,6 +56,8 @@ export function flattenExtractionResults(results: ExtractionResult[]): Spreadshe
       quantity: item?.quantity ?? null,
       unitPrice: item?.unitPrice ?? null,
       lineTotal: item?.lineTotal ?? null,
+      lineVatAmount: item?.vatAmount ?? null,
+      lineTotalWithVat: item?.totalWithVat ?? null,
     }))
   })
 }
@@ -110,7 +114,7 @@ export async function downloadSpreadsheet(rows: SpreadsheetRow[], format: SheetF
   for (const key of ['invoiceNumber', 'supplierTaxId'] satisfies SpreadsheetColumnKey[]) {
     sheet.getColumn(key).numFmt = '@'
   }
-  for (const key of ['subtotal', 'vatAmount', 'total', 'quantity', 'unitPrice', 'lineTotal'] satisfies SpreadsheetColumnKey[]) {
+  for (const key of ['subtotal', 'vatAmount', 'total', 'quantity', 'unitPrice', 'lineTotal', 'lineVatAmount', 'lineTotalWithVat'] satisfies SpreadsheetColumnKey[]) {
     sheet.getColumn(key).numFmt = '#,##0.######'
   }
   const buffer = await workbook.xlsx.writeBuffer()

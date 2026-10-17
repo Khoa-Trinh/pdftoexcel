@@ -43,6 +43,9 @@ export const typescriptExtractionService: ExtractionService = {
         quantity: item.quantity,
         unitPrice: item.unit_price,
         lineTotal: item.line_total,
+        vatRate: item.vat_rate,
+        vatAmount: item.vat_amount,
+        totalWithVat: item.total_with_vat,
       })),
     }
   },

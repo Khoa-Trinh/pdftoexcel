@@ -50,7 +50,7 @@ const COLON = `${H}(?:\\([^\\n)]*\\)${H})?[:：]?${H}`
 const REQUIRED_COLON = COLON.replace('[:：]?', '[:：]')
 
 function invoiceDate(text: string, issues: string[]): string | null {
-  const value = match('(?:^|[^a-z])ngay(?:[ \t]+(?:lap|hoa don))?[ \t]*:?[ \t]*(\\d{1,2}[ \t]*(?:thang|[/.-])[ \t]*\\d{1,2}[ \t]*(?:nam|[/.-])[ \t]*\\d{4})', text)
+  const value = match('(?:^|[^a-z])ngay(?:[ \t]+(?:lap|hoa don))?(?:[ \t]*\\((?:date|day)\\))?[ \t]*:?[ \t]*(\\d{1,2}[ \t]*(?:thang|[/.-])(?:[ \t]*\\(month\\))?[ \t]*\\d{1,2}[ \t]*(?:nam|[/.-])(?:[ \t]*\\(year\\))?[ \t]*\\d{4})', text)
   const parts = value?.match(/\d+/g)
   if (!parts || parts.length !== 3) return null
   const day = Number(parts[0]), month = Number(parts[1]), year = Number(parts[2])
@@ -68,37 +68,82 @@ function invoiceDate(text: string, issues: string[]): string | null {
 export function parseInvoicePages(pages: InvoicePage[], filename: string): InvoiceParserResult {
   const issues: string[] = []
   const items: ParsedLineItem[] = []
+  const vatRates = new Set<string>()
+  let lineVatSum = new Money(0)
+  // Combined PDFs may start with payment requests or orders and end with
+  // scanned attachments. Prefer pages explicitly headed as VAT invoices.
+  const titledPages = pages.filter((page) => labelText(page.text).includes('hoa don gia tri gia tang'))
+  const invoicePages = titledPages.length ? titledPages : pages
+  if (invoicePages.every((page) => page.text.trim().length < 30) && invoicePages.some((page) => page.hasImages)) {
+    issues.push('No extractable text found; scanned PDF is unsupported')
+  }
   let lineSum = new Money(0)
-  for (const page of pages) {
+  for (const page of invoicePages) {
     issues.push(...(page.issues ?? []))
-    if (page.text.trim().length < 30 && page.hasImages) {
-      issues.push(`Page ${page.page}: image with little text; OCR/review required`)
-    }
     for (const table of page.tables) {
       let columns: number[] | null = null
+      let rateIndex = -1, vatAmountIndex = -1, afterTaxIndex = -1
       for (const row of table) {
         const cells = row.map(clean)
         if (cells.some((cell) => columnLabels[0]!.test(labelText(cell))) && cells.some((cell) => columnLabels[1]!.test(labelText(cell)))) {
           columns = tableColumns(cells)
+          rateIndex = cells.findIndex((cell) => /^thue suat/.test(labelText(cell)))
+          vatAmountIndex = cells.findIndex((cell) => /^(?:tien thue|vat amount)/.test(labelText(cell)))
+          afterTaxIndex = cells.findIndex((cell) => /^(?:thanh tien sau thue|tong tien thanh toan)/.test(labelText(cell)))
           if (!columns) issues.push(`Page ${page.page}: unsupported table headers`)
           continue
         }
         if (!columns) continue
         const [stt = '', name = '', unit = '', qty = '', price = '', total = ''] = columns.map((column) => cells[column] ?? '')
+        const lineTotalIndex = columns[5]!
+        const rateCell = rateIndex >= 0 ? cells[rateIndex] : cells.find((cell, index) => index > lineTotalIndex && /^\d+(?:,\d+)?%$/.test(cell ?? ''))
+        const vatAmountCell = vatAmountIndex >= 0 ? cells[vatAmountIndex] : ''
+        const afterTaxCell = afterTaxIndex >= 0 ? cells[afterTaxIndex] : ''
         if (!/^\d+$/.test(stt) || !name) continue
         if (name === '2' && unit === '3' && qty === '4' && price === '5') continue
         try {
-          const quantity = vietnameseNumber(qty), unitPrice = vietnameseNumber(price), lineTotal = vietnameseNumber(total)
+          const quantity = vietnameseNumber(qty)
+          const unitPrice = vietnameseNumber(price), lineTotal = vietnameseNumber(total)
+          const isDiscount = /(?:chiet khau|giam gia|discount)/.test(labelText(name))
+          // Discount amounts are often printed as positive numbers. Keep the
+          // printed values in each item; only subtract them in reconciliation.
+          const contribution = (value: Decimal) => isDiscount && value.isPositive() ? value.negated() : value
+          function optionalNumber(value: string, field: string): Decimal | null {
+            if (!value) return null
+            try {
+              const parsed = vietnameseNumber(value)
+              jsonNumber(parsed)
+              return parsed
+            } catch {
+              issues.push(`Page ${page.page}, item ${stt}: invalid ${field}`)
+              return null
+            }
+          }
+          const itemVatRate = rateCell && /^\d+(?:,\d+)?%$/.test(rateCell)
+            ? vietnameseNumber(rateCell.slice(0, -1)) : null
+          const itemVatAmount = optionalNumber(vatAmountCell ?? '', 'VAT amount')
+          const itemTotalWithVat = optionalNumber(afterTaxCell ?? '', 'after-tax total')
           const itemNumber = Number(stt)
           if (!Number.isSafeInteger(itemNumber)) throw new Error('Item number exceeds the safe JSON numeric range')
           items.push({
             source_file: filename, page: page.page, item_no: itemNumber,
             description: name, unit, quantity: jsonNumber(quantity), unit_price: jsonNumber(unitPrice), line_total: jsonNumber(lineTotal),
+            vat_rate: itemVatRate ? jsonNumber(itemVatRate) : null,
+            vat_amount: itemVatAmount?.toNumber() ?? null,
+            total_with_vat: itemTotalWithVat?.toNumber() ?? null,
             series: null, invoice_number: null,
           })
-          lineSum = lineSum.plus(lineTotal)
+          lineSum = lineSum.plus(contribution(lineTotal))
+          if (itemVatRate) vatRates.add(itemVatRate.toString())
+          if (itemVatAmount) lineVatSum = lineVatSum.plus(contribution(itemVatAmount))
           if (quantity.times(unitPrice).minus(lineTotal).abs().greaterThan(1)) {
             issues.push(`Page ${page.page}, item ${stt}: quantity × price differs from line total`)
+          }
+          if (itemVatRate && itemVatAmount && lineTotal.times(itemVatRate).div(100).minus(itemVatAmount).abs().greaterThan(1)) {
+            issues.push(`Page ${page.page}, item ${stt}: VAT rate differs from VAT amount`)
+          }
+          if (itemVatAmount && itemTotalWithVat && lineTotal.plus(itemVatAmount).minus(itemTotalWithVat).abs().greaterThan(1)) {
+            issues.push(`Page ${page.page}, item ${stt}: pre-tax total + VAT differs from after-tax total`)
           }
         } catch (error) {
           issues.push(`Page ${page.page}, item ${stt}: ${error instanceof Error ? error.message : String(error)}`)
@@ -106,8 +151,8 @@ export function parseInvoicePages(pages: InvoicePage[], filename: string): Invoi
       }
     }
   }
-  const text = pages.map((page) => page.text.normalize('NFC')).join('\n')
-  const headerText = pages.map((page) => page.headerText.normalize('NFC')).join('\n')
+  const text = invoicePages.map((page) => page.text.normalize('NFC')).join('\n')
+  const headerText = invoicePages.map((page) => page.headerText.normalize('NFC')).join('\n')
   function amount(label: string): Decimal | null {
     const value = match(`(?:${label})${COLON}([\\d][\\d.,]*)`, text)
     if (value === null) return null
@@ -120,20 +165,47 @@ export function parseInvoicePages(pages: InvoicePage[], filename: string): Invoi
       return null
     }
   }
-  const subtotal = amount('(?:cong|tong)(?: tien)? hang|tong tien (?:hang hoa|truoc thue)|tien hang')
-  const vatRate = amount('thue suat(?: (?:gtgt|vat))?|vat rate')
-  const vatAmount = amount('tien thue(?: (?:gtgt|vat))?|thue (?:gtgt|vat)|vat amount')
-  const total = amount('tong[ \t]+(?:cong[ \t]+)?(?:tien[ \t]+)?thanh toan|tong cong thanh toan')
+  // On extended VAT tables, the final summary prints subtotal, VAT and total
+  // on one line. A label-only search would mistake the first for the total.
+  let summary: [Decimal, Decimal, Decimal] | null = null
+  for (const line of text.split('\n')) {
+    const normalized = labelText(line)
+    if (!/^(?:tong cong tien thanh toan|tong cong total amount)/.test(normalized)) continue
+    const values = line.match(/\d+(?:[.,]\d+)*/g) ?? []
+    if (values.length !== 3) continue
+    try {
+      const parsed = values.map(vietnameseNumber)
+      if (parsed.every((value) => { jsonNumber(value); return true })) {
+        summary = parsed as [Decimal, Decimal, Decimal]
+        break
+      }
+    } catch { /* Another summary format; leave the ordinary field rules in place. */ }
+  }
+  const subtotal = summary?.[0] ?? amount('(?:cong|tong)(?: tien)? hang|tong tien (?:hang hoa|truoc thue)|tien hang')
+  const vatAmount = summary?.[1] ?? amount('tien thue(?: (?:gtgt|vat))?|thue (?:gtgt|vat)|vat amount')
+  const total = summary?.[2] ?? amount('tong[ \t]+(?:cong[ \t]+)?(?:tien[ \t]+)?thanh toan|tong cong thanh toan')
+  const vatRate = vatRates.size > 1 ? null : vatRates.size === 1
+    ? vietnameseNumber([...vatRates][0]!) : amount('thue suat(?: (?:gtgt|vat))?|vat rate')
   // Do not pick the buyer's company/tax ID when the seller field is missing.
   const sellerText = text.split(/(?:Họ tên người mua|Tên (?:đơn vị(?! bán hàng)|người mua)|Đơn vị mua hàng|Người mua hàng|Buyer)/iu)[0] ?? ''
   const tax = match(`(?:ma so thue|mst|tax (?:id|code))${COLON}([\\d][\\d \t-]*)`, sellerText)
+  let seller = match(`(?:don vi ban(?: hang)?|ten (?:don vi ban(?: hang)?|nguoi ban)|nguoi ban|seller)${COLON}([^\\n]+)`, sellerText)
+    ?? match('(cong ty[^\\n]+)', sellerText)
+  if (seller) {
+    const lines = sellerText.split('\n')
+    const matchedSeller = seller
+    const index = lines.findIndex((line) => line.includes(matchedSeller))
+    const continuation = clean(lines[index + 1])
+    if (index >= 0 && continuation.length > 10 && !continuation.includes(':') &&
+      continuation === continuation.toLocaleUpperCase('vi-VN')) seller += ` ${continuation}`
+  }
   const invoice: ParsedInvoice = {
     source_file: filename,
     invoice_date: invoiceDate(text, issues),
     series: match(`(?:ky hieu|invoice series)${COLON}([A-Z0-9]+)`, text),
     // JS \b is ASCII-only: no leading boundary before Vietnamese "Số".
     invoice_number: match(`(?:^|[^\\p{L}\\p{N}_])(?:so(?: hoa don)?|invoice (?:no|number))${REQUIRED_COLON}(\\d+)\\b`, headerText),
-    seller: match(`(?:don vi ban hang|ten (?:don vi ban hang|nguoi ban)|nguoi ban|seller)${COLON}([^\\n]+)`, sellerText) ?? match('(cong ty[^\\n]+)', sellerText),
+    seller,
     seller_tax_id: tax?.replace(/\s/gu, '') ?? null,
     subtotal: subtotal?.toNumber() ?? null,
     vat_rate: vatRate?.toNumber() ?? null,
@@ -142,20 +214,27 @@ export function parseInvoicePages(pages: InvoicePage[], filename: string): Invoi
     status: 'OK', issues: '', processing_ms: 0,
   }
   for (const [key, value] of Object.entries(invoice)) {
-    if (value === null) issues.push(`Missing field: ${key}`)
+    if (value !== null || (key === 'vat_rate' && vatRates.size > 1)) continue
+    if (key === 'invoice_number' && /chua cap so/.test(labelText(headerText))) {
+      issues.push('Invoice number not yet issued')
+    } else issues.push(`Missing field: ${key}`)
   }
-  if (!items.length) issues.push('No line items parsed; unsupported layout or OCR required')
+  if (!items.length) issues.push('No line items parsed; unsupported layout or scanned PDF')
   if (items.length && subtotal !== null && lineSum.minus(subtotal).abs().greaterThan(1)) {
     issues.push('Sum of line totals differs from subtotal')
   }
   if (subtotal !== null && vatAmount !== null && total !== null && subtotal.plus(vatAmount).minus(total).abs().greaterThan(1)) {
     issues.push('Subtotal + VAT differs from invoice total')
   }
+  if (vatAmount !== null && items.length > 0 && items.every((item) => item.vat_amount !== null) && lineVatSum.minus(vatAmount).abs().greaterThan(1)) {
+    issues.push('Sum of line VAT amounts differs from invoice VAT')
+  }
   invoice.status = issues.length ? 'REVIEW' : 'OK'
   invoice.issues = issues.join('; ')
   for (const item of items) {
     item.series = invoice.series
     item.invoice_number = invoice.invoice_number
+    item.vat_rate ??= invoice.vat_rate
   }
   return { invoice, items }
 }

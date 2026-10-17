@@ -9,7 +9,8 @@ import type { ExtractionResult } from '@/types/invoice'
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
 type RequestMessage = { id: number; filename: string; bytes: ArrayBuffer }
-type ResponseMessage = { id: number; result: ExtractionResult } | { id: number; error: string }
+type ResponseMessage = { id: number; result: ExtractionResult } | { id: number; error: string } |
+  { id: number; progress: { completed: number; total: number } }
 
 function visualText(items: TextItem[], viewport: { transform: number[] }) {
   const positioned = items.map((item) => {
@@ -38,13 +39,14 @@ function visualText(items: TextItem[], viewport: { transform: number[] }) {
   }).join('\n')
 }
 
-async function extract(bytes: ArrayBuffer, filename: string): Promise<ExtractionResult> {
+async function extract(bytes: ArrayBuffer, filename: string, onProgress: (completed: number, total: number) => void): Promise<ExtractionResult> {
   if (bytes.byteLength > 4 * 1024 * 1024) throw new Error('Tệp PDF quá lớn (tối đa 4 MB).')
   if (!new TextDecoder().decode(bytes.slice(0, 1024)).includes('%PDF-')) throw new Error('Tệp không phải là PDF hợp lệ.')
   const task = getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, verbosity: 0 })
   try {
     const document = await task.promise
     if (document.numPages > 100) throw new Error('Tệp PDF vượt giới hạn 100 trang.')
+    onProgress(0, document.numPages)
     const pages: InvoicePage[] = []
     for (let number = 1; number <= document.numPages; number++) {
       const page = await document.getPage(number)
@@ -71,6 +73,7 @@ async function extract(bytes: ArrayBuffer, filename: string): Promise<Extraction
           hasImages: operators.fnArray.some((operator) => imageOps.includes(operator)),
           tables: table ? [table] : [],
         })
+        onProgress(number, document.numPages)
       } finally {
         page.cleanup()
       }
@@ -89,6 +92,7 @@ async function extract(bytes: ArrayBuffer, filename: string): Promise<Extraction
       items: parsed.items.map((item) => ({
         invoiceReference: id, page: item.page, itemNumber: item.item_no, description: item.description,
         unit: item.unit, quantity: item.quantity, unitPrice: item.unit_price, lineTotal: item.line_total,
+        vatRate: item.vat_rate, vatAmount: item.vat_amount, totalWithVat: item.total_with_vat,
       })),
     }
   } finally {
@@ -100,7 +104,9 @@ self.onmessage = async (event: MessageEvent<RequestMessage>) => {
   const { id, filename, bytes } = event.data
   let response: ResponseMessage
   try {
-    response = { id, result: await extract(bytes, filename) }
+    response = { id, result: await extract(bytes, filename, (completed, total) => {
+      self.postMessage({ id, progress: { completed, total } } satisfies ResponseMessage)
+    }) }
   } catch {
     response = { id, error: 'Không thể đọc PDF. Tệp có thể bị lỗi, được bảo vệ bằng mật khẩu hoặc không được hỗ trợ.' }
   }

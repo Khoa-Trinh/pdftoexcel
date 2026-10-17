@@ -43,22 +43,37 @@ export function positionedTable(text: PositionedText[]): string[][] | null {
       const left = columns[i - 1]!, right = columns[i]!
       boundaries.push((left.x + left.width + right.x) / 2)
     }
-    const bottom = Math.max(...columns.map((item) => item.y)) + 4
+    // VAT invoices often print rate, VAT amount and post-tax total to the right
+    // of the pre-tax "Thành tiền" column. Do not merge them into that amount.
+    const rate = header.find((item) => item.x > columns[5]!.x && /^(?:thue(?: suat| gtgt)?|vat rate)$/.test(labelText(item.text)))
+    const vatAmount = rate && header.find((item) => item.x > rate.x && /^(?:tien thue|vat amount)/.test(labelText(item.text)))
+    const afterTax = vatAmount && header.find((item) => item.x > vatAmount.x && /^(?:thanh tien sau thue|tong tien)/.test(labelText(item.text)))
+    const extraColumns = [rate && { label: 'Thuế suất', anchor: rate },
+      vatAmount && { label: 'Tiền thuế', anchor: vatAmount },
+      afterTax && { label: 'Thành tiền sau thuế', anchor: afterTax }]
+      .filter((column): column is { label: string; anchor: PositionedText } => Boolean(column))
+    let left = columns[5]!
+    for (const column of extraColumns) {
+      boundaries.push((left.x + left.width + column.anchor.x) / 2)
+      left = column.anchor
+    }
+    const bottom = Math.max(...header.map((item) => item.y)) + 4
     const rows: { y: number; tokens: PositionedText[] }[] = []
     for (const token of tokens.filter((item) => item.y > bottom)) {
       let row = rows.at(-1)
-      if (!row || token.y - row.y > 3) { row = { y: token.y, tokens: [] }; rows.push(row) }
+      if (!row || token.y - row.y > 7) { row = { y: token.y, tokens: [] }; rows.push(row) }
       row.tokens.push(token)
     }
-    const table = [['STT', 'Tên hàng hóa', 'Đơn vị', 'Số lượng', 'Đơn giá', 'Thành tiền']]
+    const table = [['STT', 'Tên hàng hóa', 'Đơn vị', 'Số lượng', 'Đơn giá', 'Thành tiền', ...extraColumns.map((column) => column.label)]]
     for (const row of rows) {
       const rowText = labelText(row.tokens.map((item) => item.text).join(' '))
       if (/cong tien|tong (?:cong |tien |thanh)|thue suat|tien thue|so tien viet|nguoi mua|nguoi ban/.test(rowText)) break
-      const cells = Array.from({ length: 6 }, () => '')
+      const cells = Array.from({ length: 6 + extraColumns.length }, () => '')
       for (const token of row.tokens.sort((a, b) => a.x - b.x)) {
         const center = token.x + token.width / 2
         const column = boundaries.findIndex((boundary) => center < boundary)
-        const index = column === -1 ? 5 : column
+        const index = column === -1 ? boundaries.length : column
+        if (index >= cells.length) continue
         cells[index] = `${cells[index]} ${token.text}`.trim()
       }
       if (/^\d+$/.test(cells[0]!)) {

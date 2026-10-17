@@ -24,6 +24,9 @@ export interface ParsedLineItem {
   quantity: number
   unit_price: number
   line_total: number
+  vat_rate: number | null
+  vat_amount: number | null
+  total_with_vat: number | null
   series: string | null
   invoice_number: string | null
 }

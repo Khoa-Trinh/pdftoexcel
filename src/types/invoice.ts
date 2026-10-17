@@ -34,6 +34,9 @@ export interface LineItem {
   quantity: number | null
   unitPrice: number | null
   lineTotal: number | null
+  vatRate: number | null
+  vatAmount: number | null
+  totalWithVat: number | null
 }
 
 export interface ExtractionResult {

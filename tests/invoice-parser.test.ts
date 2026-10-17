@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parseInvoicePages, vietnameseNumber } from '../src/lib/invoice-fields.ts'
+import { positionedTable } from '../src/lib/invoice-layout.ts'
 import { extractInvoice } from '../src/server/invoice-parser.server.ts'
 import { typescriptExtractionService } from '../src/server/extraction-service.server.ts'
 import { fixturePdf, headers, invoiceFixture, invoiceText } from './pdf-fixture.ts'
@@ -28,7 +29,8 @@ test('preserves Python JSON fields, leading zeros, decimal values and item metad
   assert.equal(result.invoice.total, 2750.275)
   assert.deepEqual(result.items[0], { source_file: 'hóa đơn.pdf', page: 1, item_no: 1,
     description: 'Hàng hóa thử nghiệm', unit: 'Cái', quantity: 2.5, unit_price: 1000.1,
-    line_total: 2500.25, series: 'C26TAA', invoice_number: '0000123' })
+    line_total: 2500.25, vat_rate: 10, vat_amount: null, total_with_vat: null,
+    series: 'C26TAA', invoice_number: '0000123' })
   assert.doesNotThrow(() => JSON.stringify(result))
 })
 
@@ -68,10 +70,13 @@ test('checks all three arithmetic relationships with a one-dong tolerance', () =
   assert.equal(withinTolerance.invoice.status, 'OK')
 })
 
-test('marks scanned/mixed pages and empty tables for review', () => {
+test('ignores image-only attachments after a text invoice but flags scanned PDFs', () => {
   const result = parseInvoicePages([page(), page({ page: 2, text: '', headerText: '', hasImages: true, tables: [] })], 'a.pdf')
-  assert.equal(result.invoice.status, 'REVIEW')
-  assert.ok(result.invoice.issues.includes('Page 2: image with little text'))
+  assert.equal(result.invoice.status, 'OK', result.invoice.issues)
+  const scanned = parseInvoicePages([page({ text: '', headerText: '', hasImages: true, tables: [] })], 'scan.pdf')
+  assert.equal(scanned.invoice.status, 'REVIEW')
+  assert.match(scanned.invoice.issues, /No extractable text found/)
+  assert.doesNotMatch(scanned.invoice.issues, /OCR/)
   const empty = parseInvoicePages([page({ tables: [] })], 'a.pdf')
   assert.ok(empty.invoice.issues.includes('No line items'))
 })
@@ -96,12 +101,11 @@ test('reads an actual Unicode PDF and ruled table without changing caller bytes'
   assert.ok(result.invoice.processing_ms > 0)
 })
 
-test('reads multiple actual PDF pages and identifies an image-only page', async () => {
+test('reads multiple actual PDF pages without flagging image-only attachments', async () => {
   const bytes = fixturePdf([{ lines: invoiceText.split('\n').map((text, i) => ({ text, x: 30, y: 950 - i * 24 })),
     table: { rows: [headers, ['1', 'Hàng', 'Cái', '2,5', '1.000,1', '2.500,25']] } }, { image: true }])
   const result = await extractInvoice(bytes)
-  assert.equal(result.invoice.status, 'REVIEW')
-  assert.ok(result.invoice.issues.includes('Page 2: image with little text'))
+  assert.equal(result.invoice.status, 'OK', result.invoice.issues)
 })
 
 test('adapter returns application types and stable invoice references', async () => {
@@ -199,4 +203,110 @@ test('does not mistake a bank branch or address number for the invoice number', 
   const headerText = `Số tài khoản: 12345678 - Ngân hàng - Chi nhánh Số 10\nĐịa chỉ: Số 5 Đường Thử\n${invoiceText}`
   const result = parseInvoicePages([page({ headerText })], 'branch.pdf')
   assert.equal(result.invoice.invoice_number, '0000123')
+})
+
+test('keeps printed discount amounts positive while reconciling them as deductions', () => {
+  const tokens = [
+    ['STT', 10, 100, 20], ['Tên hàng hóa', 70, 100, 80], ['Đơn vị', 180, 100, 35],
+    ['Số lượng', 230, 100, 45], ['Đơn giá', 290, 100, 40], ['Thành tiền', 350, 100, 50],
+    ['Thuế suất', 420, 100, 45], ['Tiền thuế', 485, 100, 50], ['Thành tiền sau thuế', 550, 100, 90],
+    ['1', 15, 130, 5], ['Cước vận chuyển', 75, 126, 90], ['Chuyến', 185, 130, 40],
+    ['1', 250, 130, 5], ['199.315', 295, 130, 45], ['199.315', 355, 130, 45],
+    ['8%', 430, 130, 15], ['15.945', 490, 130, 40], ['215.260', 560, 130, 45],
+    ['2', 15, 155, 5], ['Chiết khấu', 75, 151, 80], ['Chuyến', 185, 155, 40],
+    ['1', 250, 155, 5], ['15.056', 295, 155, 45], ['15.056', 355, 155, 45],
+    ['8%', 430, 155, 15], ['1.204', 490, 155, 40], ['16.260', 560, 155, 45],
+    ['Tổng cộng tiền thanh toán', 10, 180, 180],
+  ].map(([text, x, y, width]) => ({ text: String(text), x: Number(x), y: Number(y), width: Number(width), height: 10 }))
+  const table = positionedTable(tokens)
+  assert.ok(table)
+  assert.equal(table[1]?.[5], '199.315')
+  assert.equal(table[1]?.[6], '8%')
+  assert.equal(table[1]?.[7], '15.945')
+  assert.equal(table[1]?.[8], '215.260')
+  const text = [
+    'Ngày (Date) 25 tháng (month) 09 năm (year) 2026', 'Ký hiệu (Serial): 1C26MHD',
+    'Số (No.): 00001281', 'Tên đơn vị bán hàng: CÔNG TY THỬ NGHIỆM',
+    'Mã số thuế: 0012345678', 'Tổng cộng tiền thanh toán (Grand total): 184.259 14.741 199.000',
+  ].join('\n')
+  const result = parseInvoicePages([page({ text, headerText: text, tables: [table] })], 'vat-columns.pdf')
+  assert.equal(result.invoice.status, 'OK', result.invoice.issues)
+  assert.equal(result.invoice.invoice_date, '2026-09-25')
+  assert.equal(result.invoice.invoice_number, '00001281')
+  assert.equal(result.invoice.seller_tax_id, '0012345678')
+  assert.equal(result.invoice.subtotal, 184259)
+  assert.equal(result.invoice.vat_amount, 14741)
+  assert.equal(result.invoice.total, 199000)
+  assert.equal(result.items.length, 2)
+  assert.equal(result.items[1]?.unit_price, 15056)
+  assert.equal(result.items[1]?.line_total, 15056)
+  assert.equal(result.items[1]?.vat_amount, 1204)
+  assert.equal(result.items[1]?.total_with_vat, 16260)
+})
+
+test('mixed invoice rates keep each item rate without triggering a review', () => {
+  const text = [
+    'Ngày (Date) 12 tháng (month) 09 năm (year) 2026', 'Ký hiệu: 1C26TNT',
+    'Số: 0000123', 'CÔNG TY THỬ NGHIỆM', 'Mã số thuế: 0012345678',
+    'Tổng cộng (Total amount): 200 18 218',
+  ].join('\n')
+  const result = parseInvoicePages([page({ text, headerText: text, tables: [[
+    [...headers, 'Thuế suất', 'Tiền thuế', 'Thành tiền sau thuế'],
+    ['1', 'Hàng 8%', 'Cái', '1', '100', '100', '8%', '8', '108'],
+    ['2', 'Hàng 10%', 'Cái', '1', '100', '100', '10%', '10', '110'],
+  ]] })], 'mixed.pdf')
+  assert.equal(result.items.length, 2)
+  assert.equal(result.invoice.vat_rate, null)
+  assert.equal(result.invoice.status, 'OK', result.invoice.issues)
+  assert.deepEqual(result.items.map((item) => [item.vat_rate, item.vat_amount, item.total_with_vat]),
+    [[8, 8, 108], [10, 10, 110]])
+  const unissued = parseInvoicePages([page({ text: text.replace('Số: 0000123', 'Số: <Chưa cấp số>'),
+    headerText: text.replace('Số: 0000123', 'Số: <Chưa cấp số>'), tables: [[
+      [...headers, 'Thuế suất', 'Tiền thuế', 'Thành tiền sau thuế'],
+      ['1', 'Hàng 8%', 'Cái', '1', '100', '100', '8%', '8', '108'],
+      ['2', 'Hàng 10%', 'Cái', '1', '100', '100', '10%', '10', '110'],
+    ]] })], 'unissued.pdf')
+  assert.equal(unissued.invoice.status, 'REVIEW')
+  assert.equal(unissued.invoice.issues, 'Invoice number not yet issued')
+})
+
+test('uses VAT invoice pages instead of preceding payment and order pages', () => {
+  const payment = page({ page: 1, text: 'GIẤY ĐỀ NGHỊ THANH TOÁN\nNgày: 13/10/2026\nSố: 24',
+    headerText: 'Số: 24', tables: [] })
+  const order = page({ page: 2, text: 'BẢNG KÊ ĐƠN ĐẶT HÀNG\nSố lượng: 2',
+    headerText: '', tables: [[headers, ['1', 'Wrong order item', 'Cái', '1', '100', '100']]] })
+  const text = [
+    'HÓA ĐƠN GIÁ TRỊ GIA TĂNG', 'Ngày (day) 12 tháng (month) 10 năm (year) 2026',
+    'Ký hiệu (Serial): 1C26TDP', 'Số (Invoice No.): 00005993',
+    'Đơn vị bán (Seller): CÔNG TY MINH ĐẠI PHÚ', 'Mã số thuế: 0310690177',
+    'Cộng tiền hàng: 100', 'Thuế suất GTGT: 10%', 'Tiền thuế GTGT: 10',
+    'Tổng cộng tiền thanh toán: 110',
+  ].join('\n')
+  const invoice = page({ page: 3, text, headerText: text,
+    tables: [[headers, ['1', 'Ống thép', 'Kg', '1', '100', '100']]] })
+  const attachment = page({ page: 4, text: '', headerText: '', hasImages: true, tables: [] })
+  const result = parseInvoicePages([payment, order, invoice, attachment], 'combined.pdf')
+  assert.equal(result.invoice.status, 'OK', result.invoice.issues)
+  assert.equal(result.invoice.invoice_date, '2026-10-12')
+  assert.equal(result.invoice.invoice_number, '00005993')
+  assert.equal(result.invoice.seller, 'CÔNG TY MINH ĐẠI PHÚ')
+  assert.deepEqual(result.items.map((item) => [item.page, item.description]), [[3, 'Ống thép']])
+})
+
+test('keeps a description that starts above its numbered row', () => {
+  const tokens = [
+    ['STT', 10, 100, 20], ['Tên hàng hóa', 70, 100, 80], ['Đơn vị', 180, 100, 35],
+    ['Số lượng', 230, 100, 45], ['Đơn giá', 290, 100, 40], ['Thành tiền', 350, 100, 50],
+    ['Thép ống 304:', 75, 130, 80], ['1', 15, 136, 5], ['Kg', 185, 136, 20],
+    ['2', 250, 136, 5], ['100', 295, 136, 25], ['200', 355, 136, 25],
+    ['Phi 76 x 6000mm', 75, 142, 90],
+    ['Thép thanh 316L:', 75, 170, 90], ['2', 15, 176, 5], ['Kg', 185, 176, 20],
+    ['1', 250, 176, 5], ['50', 295, 176, 20], ['50', 355, 176, 20],
+    ['Phi 12 x 6000mm', 75, 182, 90],
+  ].map(([text, x, y, width]) => ({ text: String(text), x: Number(x), y: Number(y), width: Number(width), height: 10 }))
+  const table = positionedTable(tokens)
+  assert.ok(table)
+  assert.deepEqual(table.slice(1).map((row) => row[1]), [
+    'Thép ống 304: Phi 76 x 6000mm', 'Thép thanh 316L: Phi 12 x 6000mm',
+  ])
 })

@@ -53,15 +53,26 @@ are maintained by Cloudflare.
 
 ## Data flow and limits
 
-The PDF picker accepts multiple files. A dedicated browser Web Worker reads each
-file with PDF.js and reconstructs fields and item rows using text coordinates.
-It processes one file at a time so PDF memory use stays bounded; each file gets
+The PDF picker accepts multiple files and starts extraction immediately after selection.
+Up to two dedicated browser Web Workers read files with PDF.js and reconstruct
+fields and item rows using text coordinates. The remaining files wait in a queue,
+so PDF memory use stays bounded; each file gets
 its own result or error. Files are limited to 4 MiB and 100 pages. Scanned,
 encrypted, damaged, or unsupported PDFs need manual review. OCR is not included.
 The three supplied Rovin, 3K, and Xảo Minh invoices produce five item rows in
 local browser checks.
 
-The spreadsheet preview and XLSX/CSV downloads run locally in the browser.
+After selecting PDFs, the page offers Add, Clear all, per-file progress, and
+per-file removal. Files that are actively being read cannot be removed until
+they finish; completed and queued files can be removed while other files run.
+The full-width Xem Excel button opens a full-screen, scrollable table preview.
+Drag the handle at the start of a row to reorder it; keyboard users can focus
+the handle, press Space, use the arrow keys, and press Space again. The compact
+toolbar has a format selector, download icon, and close icon. CSV is the default;
+Excel (.xlsx) is also available. Downloads follow the visible row order and run
+locally in the browser.
+For mixed-rate invoices, each item row shows its own VAT rate and tax amount;
+an unissued invoice number is still flagged for review.
 Invoice numbers and tax IDs remain text. No PDF bytes or extracted fields are
 posted to Cloudflare, analytics, or storage. Refreshing the page clears them.
 The old Node parser and CLI remain as local references:
